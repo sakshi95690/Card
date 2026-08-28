@@ -25,10 +25,6 @@ import {
   RotateCcw,
   UserX,
   FileSpreadsheet,
-  Database,
-  Cloud,
-  Check,
-  Sparkles,
 } from 'lucide-react';
 import { DEPARTMENTS, Volunteer } from '../types';
 import {
@@ -36,10 +32,6 @@ import {
   subscribeToVolunteerUpdates,
   deactivateVolunteerCard,
   updateVolunteerStatus,
-  fetchStorageStatus,
-  triggerSupabaseMigration,
-  StorageStatusInfo,
-  MigrationReport,
 } from '../lib/storage';
 import VolunteerCard from './VolunteerCard';
 import { AppLogo } from './AppLogo';
@@ -68,61 +60,6 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState({ current: 0, total: 0 });
   const [exportSuccessMsg, setExportSuccessMsg] = useState<string | null>(null);
-
-  // Migration & Storage Status State
-  const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
-  const [storageStatus, setStorageStatus] = useState<StorageStatusInfo | null>(null);
-  const [isCheckingStorage, setIsCheckingStorage] = useState(false);
-  const [isMigrating, setIsMigrating] = useState(false);
-  const [migrationPin, setMigrationPin] = useState('2580');
-  const [migrationReport, setMigrationReport] = useState<MigrationReport | null>(null);
-  const [migrationError, setMigrationError] = useState<string | null>(null);
-
-  // Check Storage Status
-  const checkStorage = useCallback(async () => {
-    setIsCheckingStorage(true);
-    try {
-      const status = await fetchStorageStatus();
-      setStorageStatus(status);
-    } catch (err) {
-      console.warn('Storage check failed:', err);
-    } finally {
-      setIsCheckingStorage(false);
-    }
-  }, []);
-
-  const handleOpenMigrationModal = async () => {
-    setIsMigrationModalOpen(true);
-    setMigrationReport(null);
-    setMigrationError(null);
-    await checkStorage();
-  };
-
-  const handleStartMigration = async () => {
-    if (!migrationPin) {
-      setMigrationError('Please enter the Admin PIN');
-      return;
-    }
-
-    setIsMigrating(true);
-    setMigrationError(null);
-    setMigrationReport(null);
-
-    try {
-      const report = await triggerSupabaseMigration(migrationPin);
-      setMigrationReport(report);
-      if (!report.success) {
-        setMigrationError(report.error || report.message || 'Migration could not be completed');
-      } else {
-        await loadData(true);
-        await checkStorage();
-      }
-    } catch (err: any) {
-      setMigrationError(err?.message || 'Migration network error');
-    } finally {
-      setIsMigrating(false);
-    }
-  };
 
   // Load volunteers list from server
   const loadData = useCallback(async (showRefreshing = false) => {
@@ -498,18 +435,6 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
 
           {/* Desktop Actions & Export */}
           <div className="flex flex-wrap items-center gap-2">
-            {/* Storage Status & Migration Button */}
-            <button
-              type="button"
-              id="storage-status-btn"
-              onClick={handleOpenMigrationModal}
-              title="View Storage Status & Safe Cloud Migration"
-              className="w-full sm:w-auto py-2 px-3.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer min-h-[36px]"
-            >
-              <Database className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-              <span className="truncate">Storage & Migration</span>
-            </button>
-
             {/* Export CSV Button */}
             <button
               type="button"
@@ -1029,173 +954,6 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
                   <>
                     <Ban className="w-4 h-4 shrink-0" />
                     <span>Deactivate</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal: Storage Status & Safe Migration */}
-      {isMigrationModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-xs overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-5 sm:p-6 shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95 duration-150 my-auto text-slate-800">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-blue-50 text-[#1E40AF] border border-blue-200 flex items-center justify-center shrink-0">
-                  <Database className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base sm:text-lg font-bold text-slate-900 leading-tight">
-                    Storage & Safe Cloud Migration
-                  </h3>
-                  <p className="text-xs text-slate-500 font-medium">
-                    Vercel Blob ➔ Supabase Storage
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                id="close-migration-modal-btn"
-                onClick={() => setIsMigrationModalOpen(false)}
-                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-sm cursor-pointer transition-colors"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Storage Diagnostic Cards */}
-            <div className="my-4 space-y-3 text-xs">
-              <div className="grid grid-cols-2 gap-2.5">
-                <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
-                  <div className="flex items-center justify-between text-slate-500 font-semibold mb-1">
-                    <span>Supabase Storage</span>
-                    {storageStatus?.supabaseConnected ? (
-                      <span className="inline-flex items-center gap-1 text-emerald-600 font-bold text-[11px]">
-                        <Check className="w-3 h-3" /> Connected
-                      </span>
-                    ) : (
-                      <span className="text-amber-600 font-bold text-[11px]">Not Configured</span>
-                    )}
-                  </div>
-                  <p className="text-xl font-bold text-slate-800">
-                    {storageStatus?.supabaseCardsCount ?? 0}
-                  </p>
-                  <p className="text-[10px] text-slate-500">bucket: volunteer-cards</p>
-                </div>
-
-                <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
-                  <div className="flex items-center justify-between text-slate-500 font-semibold mb-1">
-                    <span>Vercel Blob</span>
-                    {storageStatus?.vercelBlobConnected ? (
-                      <span className="inline-flex items-center gap-1 text-emerald-600 font-bold text-[11px]">
-                        <Check className="w-3 h-3" /> Token Active
-                      </span>
-                    ) : (
-                      <span className="text-slate-400 font-bold text-[11px]">Optional</span>
-                    )}
-                  </div>
-                  <p className="text-xl font-bold text-slate-800">
-                    {storageStatus?.vercelBlobCardsCount ?? 0}
-                  </p>
-                  <p className="text-[10px] text-slate-500">BLOB_READ_WRITE_TOKEN</p>
-                </div>
-              </div>
-
-              {/* Safety Guarantee Notice */}
-              <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-900 flex items-start gap-2.5">
-                <ShieldCheck className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
-                <div className="text-[11px] leading-relaxed">
-                  <p className="font-bold text-emerald-950">Zero-Risk Migration Guarantee</p>
-                  <p className="text-emerald-800">
-                    Existing Vercel Blob files will <strong>NEVER</strong> be deleted. Files are securely downloaded, replicated to Supabase Storage, and database URLs are updated seamlessly.
-                  </p>
-                </div>
-              </div>
-
-              {/* Admin PIN for Migration */}
-              <div className="pt-1">
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                  Admin PIN for Authorization:
-                </label>
-                <input
-                  type="password"
-                  value={migrationPin}
-                  onChange={(e) => setMigrationPin(e.target.value)}
-                  placeholder="Enter Admin PIN (Default: 2580)"
-                  className="w-full px-3.5 py-2 rounded-xl bg-slate-50 border border-slate-300 text-slate-900 text-xs font-mono focus:bg-white focus:outline-hidden focus:border-[#1E40AF]"
-                />
-              </div>
-
-              {/* Error Display */}
-              {migrationError && (
-                <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                  <p className="text-xs font-semibold">{migrationError}</p>
-                </div>
-              )}
-
-              {/* Success / Report Display */}
-              {migrationReport && (
-                <div className="p-3.5 rounded-2xl bg-blue-50 border border-blue-200 space-y-2">
-                  <div className="flex items-center gap-1.5 text-[#1E40AF] font-bold">
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>Migration Report</span>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                    <div className="p-2 rounded-xl bg-white border border-blue-100">
-                      <p className="text-slate-500 font-semibold text-[10px]">Total Scanned</p>
-                      <p className="text-base font-bold text-slate-800">{migrationReport.totalFiles}</p>
-                    </div>
-                    <div className="p-2 rounded-xl bg-white border border-blue-100">
-                      <p className="text-emerald-600 font-semibold text-[10px]">Migrated</p>
-                      <p className="text-base font-bold text-emerald-600">{migrationReport.migratedCount}</p>
-                    </div>
-                    <div className="p-2 rounded-xl bg-white border border-blue-100">
-                      <p className="text-blue-600 font-semibold text-[10px]">Skipped/Ready</p>
-                      <p className="text-base font-bold text-blue-600">{migrationReport.alreadyMigratedOrSkipped}</p>
-                    </div>
-                  </div>
-                  {migrationReport.failedFiles.length > 0 && (
-                    <p className="text-[11px] text-rose-600 font-medium">
-                      {migrationReport.failedFiles.length} file(s) encountered network issues.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Modal Actions */}
-            <div className="grid grid-cols-2 gap-2.5 pt-2 border-t border-slate-100">
-              <button
-                type="button"
-                id="refresh-storage-btn"
-                onClick={checkStorage}
-                disabled={isCheckingStorage || isMigrating}
-                className="py-2.5 px-3.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs border border-slate-200 transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5 min-h-[40px]"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isCheckingStorage ? 'animate-spin' : ''}`} />
-                <span>Check Status</span>
-              </button>
-
-              <button
-                type="button"
-                id="run-migration-btn"
-                onClick={handleStartMigration}
-                disabled={isMigrating}
-                className="py-2.5 px-3.5 rounded-xl blue-gradient hover:opacity-95 text-white font-bold text-xs shadow-xs transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5 min-h-[40px]"
-              >
-                {isMigrating ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>Migrating...</span>
-                  </>
-                ) : (
-                  <>
-                    <Cloud className="w-3.5 h-3.5" />
-                    <span>Start Safe Migration</span>
                   </>
                 )}
               </button>
