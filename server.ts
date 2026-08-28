@@ -43,13 +43,21 @@ interface VolunteerRecord {
 // ----------------------------------------------------
 // Storage Layer: Supabase & Vercel Blob Persistence
 // ----------------------------------------------------
-const SUPABASE_URL = process.env.SUPABASE_URL?.trim();
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
+const SUPABASE_URL = (
+  process.env.SUPABASE_URL || 'https://dgmhavoihauufpvpmmvq.supabase.co'
+).trim();
+const SUPABASE_SERVICE_ROLE_KEY = (
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRnbWhhdm9paGF1dWZwdnBtbXZxIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzkyNTg4OSwiZXhwIjoyMTAzNTAxODg5fQ.qjZkgNgn6CjOZXxMujSKPHhq4fsgGzjlMRks7qL0OYI'
+).trim();
 const BUCKET_NAME = 'volunteer-cards';
 const SUPABASE_DATA_PATH = 'data/volunteers-data.json';
 
 // Use strictly BLOB_READ_WRITE_TOKEN for Vercel Blob authentication
-const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN?.trim();
+const BLOB_READ_WRITE_TOKEN = (
+  process.env.BLOB_READ_WRITE_TOKEN ||
+  'vercel_blob_rw_Yi6TEI9NrGfXZc7h_WlBAyK142LGFTbuHAayPJZ7PWATlFv'
+).trim();
 
 const USE_SUPABASE = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
 const USE_VERCEL_BLOB = Boolean(BLOB_READ_WRITE_TOKEN);
