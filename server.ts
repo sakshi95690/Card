@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { list as listVercelBlobs, put as putVercelBlob } from '@vercel/blob';
 
 const app = express();
 const PORT = 3000;
@@ -40,14 +41,18 @@ interface VolunteerRecord {
 }
 
 // ----------------------------------------------------
-// Supabase Storage & Database Persistence Layer
+// Storage Layer: Supabase & Vercel Blob Persistence
 // ----------------------------------------------------
 const SUPABASE_URL = process.env.SUPABASE_URL?.trim();
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 const BUCKET_NAME = 'volunteer-cards';
 const SUPABASE_DATA_PATH = 'data/volunteers-data.json';
 
+// Use strictly BLOB_READ_WRITE_TOKEN for Vercel Blob authentication
+const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN?.trim();
+
 const USE_SUPABASE = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+const USE_VERCEL_BLOB = Boolean(BLOB_READ_WRITE_TOKEN);
 
 let supabaseClient: SupabaseClient | null = null;
 let isBucketInitialized = false;
@@ -95,8 +100,7 @@ async function ensureSupabaseBucket(): Promise<boolean> {
 }
 
 /**
- * Upload a base64 image (photo or card) or buffer to Supabase Storage
- * Returns the public URL of the uploaded image
+ * Upload a base64 image or buffer to Supabase Storage
  */
 async function uploadImageToSupabase(
   volunteerId: string,
@@ -158,6 +162,56 @@ async function uploadImageToSupabase(
 }
 
 /**
+ * Upload an image to Vercel Blob (fallback if Supabase is not yet configured)
+ */
+async function uploadImageToVercelBlob(
+  volunteerId: string,
+  imageInput: string | Buffer,
+  filename: string = 'photo'
+): Promise<string | null> {
+  if (!BLOB_READ_WRITE_TOKEN) return null;
+
+  try {
+    let buffer: Buffer;
+    let mimeType = 'image/jpeg';
+    let extension = 'jpg';
+
+    if (typeof imageInput === 'string') {
+      const match = imageInput.match(/^data:([^;]+);base64,(.*)$/);
+      if (match) {
+        mimeType = match[1];
+        buffer = Buffer.from(match[2], 'base64');
+      } else {
+        buffer = Buffer.from(imageInput, 'base64');
+      }
+
+      if (mimeType.includes('png')) extension = 'png';
+      else if (mimeType.includes('webp')) extension = 'webp';
+      else if (mimeType.includes('jpeg') || mimeType.includes('jpg')) extension = 'jpg';
+    } else {
+      buffer = imageInput;
+      if (filename.endsWith('.png')) mimeType = 'image/png';
+      else if (filename.endsWith('.webp')) mimeType = 'image/webp';
+    }
+
+    const cleanFilename = filename.replace(/\.[^/.]+$/, '');
+    const pathname = `${volunteerId}/${cleanFilename}.${extension}`;
+
+    const blob = await putVercelBlob(pathname, buffer, {
+      access: 'public',
+      token: BLOB_READ_WRITE_TOKEN,
+      addRandomSuffix: false,
+      contentType: mimeType,
+    });
+
+    return blob.url;
+  } catch (err: any) {
+    console.error('[Vercel Blob] Error uploading image:', err?.message || err);
+    return null;
+  }
+}
+
+/**
  * Delete all files associated with a volunteer from Supabase Storage
  */
 async function deleteVolunteerFilesFromSupabase(
@@ -168,7 +222,6 @@ async function deleteVolunteerFilesFromSupabase(
   if (!client) return false;
 
   try {
-    // List all files in folder volunteerId
     const { data: files, error: listError } = await client.storage
       .from(BUCKET_NAME)
       .list(volunteerId);
@@ -186,7 +239,6 @@ async function deleteVolunteerFilesFromSupabase(
         }
       }
     } else {
-      // Fallback common filenames if list is empty
       filePathsToRemove.push(
         `${volunteerId}/photo.jpg`,
         `${volunteerId}/photo.png`,
@@ -233,7 +285,7 @@ async function loadVolunteersFromSupabase(): Promise<VolunteerRecord[]> {
     const parsed = JSON.parse(text);
     return Array.isArray(parsed) ? parsed : [];
   } catch (err: any) {
-    console.error('[Supabase Storage] Error reading database JSON:', err?.message || err);
+    console.warn('[Supabase Storage] Notice reading database JSON (may be new database):', err?.message || err);
     return [];
   }
 }
@@ -268,7 +320,146 @@ async function saveVolunteersToSupabase(volunteers: VolunteerRecord[]): Promise<
   }
 }
 
-// ---- Local filesystem fallback (local dev or when Supabase is not configured) ----
+/**
+ * Load existing volunteer records directly from Vercel Blob store using BLOB_READ_WRITE_TOKEN
+ */
+async function loadVolunteersFromVercelBlob(): Promise<VolunteerRecord[]> {
+  if (!BLOB_READ_WRITE_TOKEN) return [];
+
+  try {
+    let hasMore = true;
+    let cursor: string | undefined = undefined;
+    const allBlobs: Array<{ url: string; pathname: string; downloadUrl: string; size: number }> = [];
+
+    while (hasMore) {
+      const response = await listVercelBlobs({
+        token: BLOB_READ_WRITE_TOKEN,
+        cursor,
+        limit: 1000,
+      });
+
+      allBlobs.push(...response.blobs);
+      hasMore = response.hasMore;
+      cursor = response.cursor;
+    }
+
+    if (allBlobs.length === 0) {
+      return [];
+    }
+
+    console.log(`[Vercel Blob] Found ${allBlobs.length} blobs in Vercel Blob store.`);
+
+    // 1. Search for known database JSON file paths
+    const dbCandidateFilenames = [
+      'data/volunteers-data.json',
+      'volunteers-data.json',
+      'data/volunteers.json',
+      'volunteers.json',
+      'volunteers/data.json',
+      'volunteers/volunteers.json',
+    ];
+
+    for (const candidate of dbCandidateFilenames) {
+      const match = allBlobs.find(
+        (b) =>
+          b.pathname === candidate ||
+          b.pathname.endsWith(`/${candidate}`) ||
+          b.pathname.split('/').pop() === candidate.split('/').pop()
+      );
+
+      if (match) {
+        try {
+          const res = await fetch(match.downloadUrl || match.url);
+          if (res.ok) {
+            const text = await res.text();
+            const parsed = JSON.parse(text);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              console.log(`[Vercel Blob] Successfully loaded ${parsed.length} volunteer records from blob '${match.pathname}'.`);
+              return parsed;
+            }
+          }
+        } catch (err) {
+          console.warn(`[Vercel Blob] Could not parse DB candidate '${match.pathname}':`, err);
+        }
+      }
+    }
+
+    // 2. Check if individual volunteer folders exist (e.g. VOL-2026-XXXX)
+    const volunteerMap = new Map<string, Partial<VolunteerRecord>>();
+    for (const blob of allBlobs) {
+      const volIdMatch = blob.pathname.match(/(VOL-2026-\d+)/i);
+      if (volIdMatch) {
+        const volId = volIdMatch[1].toUpperCase();
+        const current = volunteerMap.get(volId) || { id: volId };
+
+        if (blob.pathname.endsWith('.json')) {
+          try {
+            const res = await fetch(blob.downloadUrl || blob.url);
+            if (res.ok) {
+              const parsed = await res.json();
+              if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                Object.assign(current, parsed);
+              }
+            }
+          } catch {
+            // ignore
+          }
+        } else if (blob.pathname.includes('card')) {
+          current.cardImageUrl = blob.url;
+        } else if (blob.pathname.includes('photo') || /\.(jpe?g|png|webp)$/i.test(blob.pathname)) {
+          current.imageUrl = blob.url;
+        }
+        volunteerMap.set(volId, current);
+      }
+    }
+
+    if (volunteerMap.size > 0) {
+      const reconstructed: VolunteerRecord[] = [];
+      for (const [id, partial] of volunteerMap.entries()) {
+        reconstructed.push({
+          id,
+          name: partial.name || `Volunteer ${id}`,
+          phone: partial.phone || '',
+          email: partial.email || '',
+          hodName: partial.hodName || '',
+          department: partial.department || 'General Seva',
+          imageUrl: partial.imageUrl || partial.cardImageUrl || '',
+          cardImageUrl: partial.cardImageUrl,
+          createdAt: partial.createdAt || new Date().toISOString(),
+          status: (partial.status as any) || 'Active',
+          cardStatus: (partial.cardStatus as any) || 'Generated',
+        });
+      }
+      console.log(`[Vercel Blob] Reconstructed ${reconstructed.length} records from blob file paths.`);
+      return reconstructed;
+    }
+  } catch (err: any) {
+    console.error('[Vercel Blob] Error reading from Vercel Blob store:', err?.message || err);
+  }
+  return [];
+}
+
+/**
+ * Save database backup to Vercel Blob store
+ */
+async function saveVolunteersToVercelBlob(volunteers: VolunteerRecord[]): Promise<boolean> {
+  if (!BLOB_READ_WRITE_TOKEN) return false;
+  try {
+    const jsonString = JSON.stringify(volunteers, null, 2);
+    await putVercelBlob('data/volunteers-data.json', jsonString, {
+      access: 'public',
+      token: BLOB_READ_WRITE_TOKEN,
+      addRandomSuffix: false,
+      contentType: 'application/json',
+    });
+    return true;
+  } catch (err: any) {
+    console.error('[Vercel Blob] Error saving database JSON to Vercel Blob:', err?.message || err);
+    return false;
+  }
+}
+
+// ---- Local filesystem fallback (local dev or ephemeral node replica) ----
 function getWritableDataDir(): string {
   if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
     return path.join('/tmp', 'data');
@@ -335,22 +526,51 @@ function saveVolunteersToFile(volunteers: VolunteerRecord[]): boolean {
   }
 }
 
-// ---- Unified storage API used by all routes ----
+// ---- Unified storage API with seamless Vercel Blob -> Supabase fallback ----
 async function loadVolunteers(): Promise<VolunteerRecord[]> {
   let list: VolunteerRecord[] = [];
+
+  // 1. Try Supabase Storage first (if configured)
   if (USE_SUPABASE) {
-    list = await loadVolunteersFromSupabase();
-    // If Supabase database JSON is empty, fall back to initial file if exists
-    if (list.length === 0) {
-      const fileList = loadVolunteersFromFile();
-      if (fileList.length > 0) {
-        list = fileList;
-        // Auto-sync initial file list to Supabase
-        await saveVolunteersToSupabase(fileList);
+    try {
+      list = await loadVolunteersFromSupabase();
+    } catch (err) {
+      console.warn('[Storage] Error reading Supabase database:', err);
+    }
+  }
+
+  // 2. If Supabase is empty or not configured, check Vercel Blob (Restore old data visibility!)
+  if (list.length === 0 && USE_VERCEL_BLOB) {
+    try {
+      const blobList = await loadVolunteersFromVercelBlob();
+      if (blobList.length > 0) {
+        console.log(`[Storage] Restored ${blobList.length} existing records from Vercel Blob.`);
+        list = blobList;
+
+        // If Supabase is configured, automatically mirror records into Supabase so they are immediately available
+        if (USE_SUPABASE) {
+          saveVolunteersToSupabase(blobList).catch((mirrorErr) => {
+            console.warn('[Storage] Auto-sync to Supabase warning:', mirrorErr);
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('[Storage] Error loading from Vercel Blob:', err);
+    }
+  }
+
+  // 3. Fallback to local filesystem replica
+  if (list.length === 0) {
+    const fileList = loadVolunteersFromFile();
+    if (fileList.length > 0) {
+      list = fileList;
+      if (USE_SUPABASE) {
+        saveVolunteersToSupabase(fileList).catch(() => {});
+      }
+      if (USE_VERCEL_BLOB) {
+        saveVolunteersToVercelBlob(fileList).catch(() => {});
       }
     }
-  } else {
-    list = loadVolunteersFromFile();
   }
 
   return list.map((v: any) => ({
@@ -361,13 +581,22 @@ async function loadVolunteers(): Promise<VolunteerRecord[]> {
 }
 
 async function saveVolunteers(volunteers: VolunteerRecord[]): Promise<boolean> {
+  let success = false;
+
   if (USE_SUPABASE) {
-    const success = await saveVolunteersToSupabase(volunteers);
-    // Also save to local file as immediate local replica
-    saveVolunteersToFile(volunteers);
-    return success;
+    const supabaseSuccess = await saveVolunteersToSupabase(volunteers);
+    if (supabaseSuccess) success = true;
   }
-  return saveVolunteersToFile(volunteers);
+
+  if (USE_VERCEL_BLOB) {
+    const blobSuccess = await saveVolunteersToVercelBlob(volunteers);
+    if (blobSuccess) success = true;
+  }
+
+  // Always save local file replica
+  saveVolunteersToFile(volunteers);
+
+  return USE_SUPABASE || USE_VERCEL_BLOB ? success : true;
 }
 
 async function generateVolunteerId(currentList: VolunteerRecord[]): Promise<string> {
@@ -631,14 +860,17 @@ const postVolunteerHandler = async (req: express.Request, res: express.Response)
 
     // If Supabase Storage is configured and imageUrl is a base64 data URL, upload to Supabase
     let finalImageUrl = imageUrl;
-    if (USE_SUPABASE && typeof imageUrl === 'string' && imageUrl.startsWith('data:')) {
+    if (typeof imageUrl === 'string' && imageUrl.startsWith('data:')) {
       try {
-        const uploadedUrl = await uploadImageToSupabase(newId, imageUrl, 'photo');
-        if (uploadedUrl) {
-          finalImageUrl = uploadedUrl;
+        if (USE_SUPABASE) {
+          const uploadedUrl = await uploadImageToSupabase(newId, imageUrl, 'photo');
+          if (uploadedUrl) finalImageUrl = uploadedUrl;
+        } else if (USE_VERCEL_BLOB) {
+          const uploadedUrl = await uploadImageToVercelBlob(newId, imageUrl, 'photo');
+          if (uploadedUrl) finalImageUrl = uploadedUrl;
         }
       } catch (uploadErr) {
-        console.warn(`[Supabase Storage] Photo upload failed for ${newId}, storing image locally/in payload:`, uploadErr);
+        console.warn(`[Storage] Photo upload failed for ${newId}, storing image locally/in payload:`, uploadErr);
       }
     }
 
@@ -685,7 +917,7 @@ apiRouter.post('/volunteer', postVolunteerHandler);
 apiRouter.post('/volunteer/register', postVolunteerHandler);
 apiRouter.post('/volunteers/register', postVolunteerHandler);
 
-// Upload generated full card image (JPG/PNG/WebP) to Supabase Storage
+// Upload generated full card image (JPG/PNG/WebP) to Supabase Storage or Vercel Blob
 const uploadCardImageHandler = async (req: express.Request, res: express.Response) => {
   try {
     const { id } = req.params;
@@ -702,9 +934,17 @@ const uploadCardImageHandler = async (req: express.Request, res: express.Respons
     }
 
     let publicCardUrl = cardImage;
+    const ext = format === 'png' ? 'png' : format === 'jpg' || format === 'jpeg' ? 'jpg' : 'webp';
+
     if (USE_SUPABASE) {
-      const ext = format === 'png' ? 'png' : format === 'jpg' || format === 'jpeg' ? 'jpg' : 'webp';
       const uploaded = await uploadImageToSupabase(list[index].id, cardImage, `card.${ext}`);
+      if (uploaded) {
+        publicCardUrl = uploaded;
+        list[index].cardImageUrl = uploaded;
+        await saveVolunteers(list);
+      }
+    } else if (USE_VERCEL_BLOB) {
+      const uploaded = await uploadImageToVercelBlob(list[index].id, cardImage, `card.${ext}`);
       if (uploaded) {
         publicCardUrl = uploaded;
         list[index].cardImageUrl = uploaded;
@@ -802,6 +1042,45 @@ const deleteVolunteerHandler = async (req: express.Request, res: express.Respons
 apiRouter.delete('/volunteers/:id', deleteVolunteerHandler);
 apiRouter.delete('/volunteer/:id', deleteVolunteerHandler);
 
+// Storage Diagnostics & Migration Status Endpoint
+apiRouter.get('/admin/storage-status', async (_req, res) => {
+  try {
+    const list = await loadVolunteers();
+    let supabaseCards = 0;
+    let vercelBlobCards = 0;
+    let unmigratedCount = 0;
+
+    for (const v of list) {
+      const isSupabase = Boolean(SUPABASE_URL && v.imageUrl && v.imageUrl.includes(SUPABASE_URL));
+      const isVercelBlob = Boolean(v.imageUrl && (v.imageUrl.includes('blob.vercel-storage.com') || v.imageUrl.includes('public.blob.vercel')));
+
+      if (isSupabase) {
+        supabaseCards++;
+      } else if (isVercelBlob) {
+        vercelBlobCards++;
+        unmigratedCount++;
+      } else if (v.imageUrl && !isSupabase) {
+        unmigratedCount++;
+      }
+    }
+
+    return res.json({
+      success: true,
+      supabaseConnected: USE_SUPABASE,
+      vercelBlobConnected: USE_VERCEL_BLOB,
+      totalVolunteers: list.length,
+      supabaseCardsCount: supabaseCards,
+      vercelBlobCardsCount: vercelBlobCards,
+      unmigratedCount,
+      activeBackend: USE_SUPABASE ? 'Supabase Storage' : USE_VERCEL_BLOB ? 'Vercel Blob' : 'Local file',
+      isMigrationReady: Boolean(USE_SUPABASE && (USE_VERCEL_BLOB || unmigratedCount > 0)),
+    });
+  } catch (err: any) {
+    console.error('Error in /api/admin/storage-status:', err);
+    return res.status(500).json({ success: false, error: 'Error checking storage status' });
+  }
+});
+
 // Safe Migration Endpoint: Migrate existing volunteer photos/cards to Supabase Storage
 apiRouter.post('/admin/migrate-to-supabase', async (req, res) => {
   try {
@@ -820,67 +1099,209 @@ apiRouter.post('/admin/migrate-to-supabase', async (req, res) => {
     }
 
     const list = await loadVolunteers();
-    let migratedCount = 0;
-    let skippedCount = 0;
-    const errors: string[] = [];
+    const oldUrlToNewSupabaseUrl = new Map<string, string>();
+    const failedFiles: Array<{ id: string; url: string; reason: string }> = [];
+    let totalDiscovered = 0;
+    let successfullyMigrated = 0;
+    let alreadyMigratedOrSkipped = 0;
 
-    for (let i = 0; i < list.length; i++) {
-      const vol = list[i];
-      const isAlreadySupabase = vol.imageUrl && SUPABASE_URL && vol.imageUrl.includes(SUPABASE_URL);
+    // STEP 1: Scan Vercel Blob store directly if BLOB_READ_WRITE_TOKEN is available
+    if (BLOB_READ_WRITE_TOKEN) {
+      try {
+        let hasMore = true;
+        let cursor: string | undefined = undefined;
+        const allBlobs: Array<{ url: string; pathname: string; downloadUrl: string; size: number }> = [];
 
-      if (vol.imageUrl && !isAlreadySupabase) {
-        try {
-          let buffer: Buffer | null = null;
-          let ext = 'jpg';
-
-          if (vol.imageUrl.startsWith('data:')) {
-            const match = vol.imageUrl.match(/^data:([^;]+);base64,(.*)$/);
-            if (match) {
-              const mime = match[1];
-              if (mime.includes('png')) ext = 'png';
-              else if (mime.includes('webp')) ext = 'webp';
-              buffer = Buffer.from(match[2], 'base64');
-            }
-          } else if (vol.imageUrl.startsWith('http://') || vol.imageUrl.startsWith('https://')) {
-            // Fetch remote image (e.g. from existing Vercel Blob URL)
-            const resp = await fetch(vol.imageUrl);
-            if (resp.ok) {
-              const arrayBuf = await resp.arrayBuffer();
-              buffer = Buffer.from(arrayBuf);
-              const contentType = resp.headers.get('content-type') || '';
-              if (contentType.includes('png')) ext = 'png';
-              else if (contentType.includes('webp')) ext = 'webp';
-            }
-          }
-
-          if (buffer) {
-            const uploadedUrl = await uploadImageToSupabase(vol.id, buffer, `photo.${ext}`);
-            if (uploadedUrl) {
-              list[i].imageUrl = uploadedUrl;
-              migratedCount++;
-            } else {
-              errors.push(`Upload failed for ${vol.id}`);
-            }
-          } else {
-            skippedCount++;
-          }
-        } catch (mErr: any) {
-          errors.push(`Error processing ${vol.id}: ${mErr?.message || mErr}`);
+        while (hasMore) {
+          const response = await listVercelBlobs({
+            token: BLOB_READ_WRITE_TOKEN,
+            cursor,
+            limit: 1000,
+          });
+          allBlobs.push(...response.blobs);
+          hasMore = response.hasMore;
+          cursor = response.cursor;
         }
-      } else {
-        skippedCount++;
+
+        totalDiscovered += allBlobs.length;
+
+        for (const blob of allBlobs) {
+          const targetPath = blob.pathname.replace(/^\/+/, '');
+
+          // Skip master JSON from direct file copy
+          if (targetPath.endsWith('.json')) continue;
+
+          try {
+            // Check if already in Supabase
+            const { data: pubData } = getSupabase()!.storage.from(BUCKET_NAME).getPublicUrl(targetPath);
+            const { data: existingFileData } = await getSupabase()!.storage.from(BUCKET_NAME).list(path.dirname(targetPath) === '.' ? '' : path.dirname(targetPath), {
+              search: path.basename(targetPath),
+            });
+
+            const alreadyExists = existingFileData && existingFileData.some((f) => f.name === path.basename(targetPath) && f.metadata?.size === blob.size);
+
+            if (alreadyExists) {
+              alreadyMigratedOrSkipped++;
+              oldUrlToNewSupabaseUrl.set(blob.url, pubData.publicUrl);
+              oldUrlToNewSupabaseUrl.set(blob.downloadUrl, pubData.publicUrl);
+              continue;
+            }
+
+            // Download from Vercel Blob
+            const fetchRes = await fetch(blob.downloadUrl || blob.url);
+            if (!fetchRes.ok) {
+              throw new Error(`HTTP ${fetchRes.status} downloading blob`);
+            }
+
+            const arrBuf = await fetchRes.arrayBuffer();
+            const buffer = Buffer.from(arrBuf);
+            const mimeType = fetchRes.headers.get('content-type') || 'image/jpeg';
+
+            const { error: upErr } = await getSupabase()!.storage.from(BUCKET_NAME).upload(targetPath, buffer, {
+              contentType: mimeType,
+              upsert: true,
+              cacheControl: '3600',
+            });
+
+            if (upErr) throw upErr;
+
+            oldUrlToNewSupabaseUrl.set(blob.url, pubData.publicUrl);
+            oldUrlToNewSupabaseUrl.set(blob.downloadUrl, pubData.publicUrl);
+            successfullyMigrated++;
+          } catch (bErr: any) {
+            failedFiles.push({
+              id: targetPath,
+              url: blob.url,
+              reason: bErr?.message || String(bErr),
+            });
+          }
+        }
+      } catch (blobScanErr: any) {
+        console.warn('[Migration] Error during Vercel Blob scan:', blobScanErr);
       }
     }
 
+    // STEP 2: Map and migrate records from volunteer database
+    for (let i = 0; i < list.length; i++) {
+      const vol = list[i];
+
+      // Check photo imageUrl
+      if (vol.imageUrl) {
+        totalDiscovered++;
+        const isAlreadySupabase = SUPABASE_URL && vol.imageUrl.includes(SUPABASE_URL);
+
+        if (isAlreadySupabase) {
+          alreadyMigratedOrSkipped++;
+        } else if (oldUrlToNewSupabaseUrl.has(vol.imageUrl)) {
+          list[i].imageUrl = oldUrlToNewSupabaseUrl.get(vol.imageUrl)!;
+        } else {
+          try {
+            let buffer: Buffer | null = null;
+            let ext = 'jpg';
+            let mimeType = 'image/jpeg';
+
+            if (vol.imageUrl.startsWith('data:')) {
+              const match = vol.imageUrl.match(/^data:([^;]+);base64,(.*)$/);
+              if (match) {
+                mimeType = match[1];
+                if (mimeType.includes('png')) ext = 'png';
+                else if (mimeType.includes('webp')) ext = 'webp';
+                buffer = Buffer.from(match[2], 'base64');
+              }
+            } else if (vol.imageUrl.startsWith('http://') || vol.imageUrl.startsWith('https://')) {
+              const resp = await fetch(vol.imageUrl);
+              if (resp.ok) {
+                const arrayBuf = await resp.arrayBuffer();
+                buffer = Buffer.from(arrayBuf);
+                const ct = resp.headers.get('content-type') || '';
+                if (ct.includes('png')) {
+                  ext = 'png';
+                  mimeType = 'image/png';
+                } else if (ct.includes('webp')) {
+                  ext = 'webp';
+                  mimeType = 'image/webp';
+                }
+              }
+            }
+
+            if (buffer) {
+              const storagePath = `${vol.id}/photo.${ext}`;
+              const { error: upErr } = await getSupabase()!.storage.from(BUCKET_NAME).upload(storagePath, buffer, {
+                contentType: mimeType,
+                upsert: true,
+                cacheControl: '3600',
+              });
+
+              if (upErr) throw upErr;
+
+              const { data: pubData } = getSupabase()!.storage.from(BUCKET_NAME).getPublicUrl(storagePath);
+              list[i].imageUrl = pubData.publicUrl;
+              oldUrlToNewSupabaseUrl.set(vol.imageUrl, pubData.publicUrl);
+              successfullyMigrated++;
+            } else {
+              alreadyMigratedOrSkipped++;
+            }
+          } catch (mErr: any) {
+            failedFiles.push({
+              id: vol.id,
+              url: vol.imageUrl,
+              reason: mErr?.message || String(mErr),
+            });
+          }
+        }
+      }
+
+      // Check cardImageUrl
+      if (vol.cardImageUrl) {
+        totalDiscovered++;
+        const isCardSupabase = SUPABASE_URL && vol.cardImageUrl.includes(SUPABASE_URL);
+
+        if (isCardSupabase) {
+          alreadyMigratedOrSkipped++;
+        } else if (oldUrlToNewSupabaseUrl.has(vol.cardImageUrl)) {
+          list[i].cardImageUrl = oldUrlToNewSupabaseUrl.get(vol.cardImageUrl)!;
+        } else {
+          try {
+            const resp = await fetch(vol.cardImageUrl);
+            if (resp.ok) {
+              const arrayBuf = await resp.arrayBuffer();
+              const buffer = Buffer.from(arrayBuf);
+              const storagePath = `${vol.id}/card.png`;
+
+              const { error: upErr } = await getSupabase()!.storage.from(BUCKET_NAME).upload(storagePath, buffer, {
+                contentType: 'image/png',
+                upsert: true,
+                cacheControl: '3600',
+              });
+
+              if (!upErr) {
+                const { data: pubData } = getSupabase()!.storage.from(BUCKET_NAME).getPublicUrl(storagePath);
+                list[i].cardImageUrl = pubData.publicUrl;
+                successfullyMigrated++;
+              }
+            }
+          } catch (cErr: any) {
+            failedFiles.push({
+              id: `${vol.id}-card`,
+              url: vol.cardImageUrl,
+              reason: cErr?.message || String(cErr),
+            });
+          }
+        }
+      }
+    }
+
+    // Save updated database with new Supabase URLs
     await saveVolunteers(list);
 
     return res.json({
       success: true,
-      message: `Migration completed: ${migratedCount} migrated, ${skippedCount} skipped, ${errors.length} errors`,
-      migratedCount,
-      skippedCount,
-      total: list.length,
-      errors: errors.slice(0, 10),
+      message: `Migration completed: ${successfullyMigrated} successfully migrated, ${alreadyMigratedOrSkipped} skipped/already migrated, ${failedFiles.length} failed.`,
+      totalFiles: totalDiscovered,
+      migratedCount: successfullyMigrated,
+      alreadyMigratedOrSkipped,
+      failedFiles,
+      safetyNote: 'All original Vercel Blob files remain completely intact and unmodified.',
     });
   } catch (err: any) {
     console.error('Error in /api/admin/migrate-to-supabase:', err);
