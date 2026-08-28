@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    background-color: #F8FAFC;
+    color: #1E293B;
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+.font-serif-cultural {
+  font-family: 'Playfair Display', Georgia, 'Times New Roman', serif;
+}
+
+.festive-gradient,
+.blue-gradient {
+  background: linear-gradient(135deg, #0F294A 0%, #1E40AF 55%, #2563EB 100%);
+}
+
+.festive-gradient-hover:hover,
+.blue-gradient-hover:hover {
+  background: linear-gradient(135deg, #0A1E36 0%, #1E3A8A 55%, #1D4ED8 100%);
+}
+
+.card-shadow {
+  box-shadow: 0 10px 25px -5px rgba(30, 64, 175, 0.12), 0 8px 10px -6px rgba(30, 64, 175, 0.08);
+}
+
+.card-shadow-lg {
+  box-shadow: 0 20px 35px -8px rgba(30, 64, 175, 0.18), 0 12px 16px -8px rgba(15, 41, 74, 0.12);
+}
+
+@media print {
+  @page {
+    margin: 8mm;
+    size: auto;
+  }
+
+  body {
+    background: #ffffff !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    color: #000000 !important;
+  }
+
+  /* Hide everything except the printable card elements */
+  header,
+  footer,
+  nav,
+  button,
+  input,
+  select,
+  .no-print,
+  #admin-search-input,
+  #admin-notifications-btn,
+  #refresh-volunteers-btn {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  /* Ensure modal backdrops don't dark out printed card */
+  .fixed.inset-0 {
+    position: static !important;
+    background: transparent !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: block !important;
+  }
+
+  .printable-card {
+    display: block !important;
+    box-shadow: none !important;
+    border: 1.5px solid #1E40AF !important;
+    margin: 10px auto !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .page-break-after {
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+}
