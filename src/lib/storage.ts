@@ -34,6 +34,8 @@ function extractErrorMessage(data: any, fallbackMessage: string): string {
   return fallbackMessage;
 }
 
+const DIRECT_SUPABASE_DATA_URL = 'https://dgmhavoihauufpvpmmvq.supabase.co/storage/v1/object/public/volunteer-cards/data/volunteers-data.json';
+
 /**
  * Fetch all volunteers directly from the central database (Cross-device persistence)
  */
@@ -46,23 +48,38 @@ export async function fetchAllVolunteers(): Promise<Volunteer[]> {
       },
     });
 
-    if (!res.ok) {
-      console.warn(`Fetch volunteers returned status ${res.status}`);
-      return [];
-    }
-
-    const contentType = res.headers.get('content-type') || '';
-    if (typeof contentType === 'string' && contentType.toLowerCase().includes('application/json')) {
-      const data = await res.json();
-      if (data && Array.isArray(data.volunteers)) {
-        return data.volunteers;
+    if (res.ok) {
+      const contentType = res.headers.get('content-type') || '';
+      if (typeof contentType === 'string' && contentType.toLowerCase().includes('application/json')) {
+        const data = await res.json();
+        if (data && Array.isArray(data.volunteers)) {
+          return data.volunteers;
+        }
       }
     }
-    return [];
   } catch (err) {
-    console.error('Failed to fetch volunteers database:', err);
-    return [];
+    console.warn('Failed to fetch from /api/volunteers, attempting direct storage fallback:', err);
   }
+
+  // Resilient fallback for Vercel/Client-side environments directly to persistent storage
+  try {
+    const fallbackRes = await fetch(DIRECT_SUPABASE_DATA_URL, {
+      headers: {
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+      },
+    });
+    if (fallbackRes.ok) {
+      const fallbackData = await fallbackRes.json();
+      if (Array.isArray(fallbackData)) {
+        return fallbackData;
+      }
+    }
+  } catch (fallbackErr) {
+    console.error('Failed to fetch volunteers from fallback storage:', fallbackErr);
+  }
+
+  return [];
 }
 
 /**
@@ -79,12 +96,24 @@ export async function fetchVolunteerById(id: string): Promise<Volunteer | null> 
       const contentType = res.headers.get('content-type') || '';
       if (typeof contentType === 'string' && contentType.toLowerCase().includes('application/json')) {
         const data = await res.json();
-        return data;
+        if (data && data.id) {
+          return data;
+        }
       }
     }
   } catch (err) {
-    console.error(`Failed to fetch volunteer ${id}:`, err);
+    console.warn(`Failed to fetch volunteer ${id} from API, checking fallback storage:`, err);
   }
+
+  // Fallback to searching all volunteers in persistent storage
+  try {
+    const all = await fetchAllVolunteers();
+    const found = all.find((v) => v.id.toLowerCase() === id.toLowerCase());
+    if (found) return found;
+  } catch {
+    // ignore
+  }
+
   return null;
 }
 
