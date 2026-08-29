@@ -41,6 +41,7 @@ export const DEPARTMENTS = [
   'Crisis Mgmt',
   'Crowd Control',
   'Decoration',
+  'DYPH',
   'Electricity',
   'G. Prasadam Distribution',
   'Gift Distribution',
