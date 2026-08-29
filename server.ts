@@ -1390,8 +1390,9 @@ apiRouter.use((req, res) => {
   });
 });
 
-// Mount Central API Router on /api
+// Mount Central API Router on /api and as sub-router for Vercel serverless functions
 app.use('/api', apiRouter);
+app.use(apiRouter);
 
 // Vite / Static setup
 async function start() {
@@ -1422,7 +1423,10 @@ async function start() {
   });
 }
 
-start();
+// Only start standalone server when not in Vercel Serverless environment
+if (!process.env.VERCEL) {
+  start();
+}
 
 export default app;
 export { app, apiRouter };
