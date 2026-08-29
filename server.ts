@@ -603,18 +603,8 @@ function saveVolunteersToFile(volunteers: VolunteerRecord[]): boolean {
 async function loadVolunteers(): Promise<VolunteerRecord[]> {
   let list: VolunteerRecord[] = [];
 
-  // 1. Try local filesystem replica first (fast and always reliable in the running container)
-  try {
-    const fileList = loadVolunteersFromFile();
-    if (fileList.length > 0) {
-      list = fileList;
-    }
-  } catch (fileErr) {
-    console.warn('[Storage] Error reading local file:', fileErr);
-  }
-
-  // 2. If local list is empty and Supabase is configured, try Supabase Storage
-  if (list.length === 0 && USE_SUPABASE) {
+  // 1. Supabase is the persistent source of truth on serverless (Vercel) — try it first
+  if (USE_SUPABASE) {
     try {
       const sbList = await loadVolunteersFromSupabase();
       if (sbList && sbList.length > 0) {
@@ -626,7 +616,7 @@ async function loadVolunteers(): Promise<VolunteerRecord[]> {
     }
   }
 
-  // 3. If still empty and Vercel Blob is configured, check Vercel Blob
+  // 2. If Supabase gave nothing and Vercel Blob is configured, check Vercel Blob
   if (list.length === 0 && USE_VERCEL_BLOB) {
     try {
       const blobList = await loadVolunteersFromVercelBlob();
@@ -639,6 +629,18 @@ async function loadVolunteers(): Promise<VolunteerRecord[]> {
     }
   }
 
+  // 3. Last resort: local filesystem replica (may be stale on serverless, but better than nothing)
+  if (list.length === 0) {
+    try {
+      const fileList = loadVolunteersFromFile();
+      if (fileList.length > 0) {
+        list = fileList;
+      }
+    } catch (fileErr) {
+      console.warn('[Storage] Error reading local file:', fileErr);
+    }
+  }
+
   return list.map((v: any) => ({
     ...v,
     cardStatus: v.cardStatus || 'Generated',
@@ -647,23 +649,39 @@ async function loadVolunteers(): Promise<VolunteerRecord[]> {
 }
 
 async function saveVolunteers(volunteers: VolunteerRecord[]): Promise<boolean> {
-  // Always save local file replica first (100% reliable)
+  // Save local file replica (best-effort; not persistent on serverless, used as a fast cache only)
   const localSuccess = saveVolunteersToFile(volunteers);
 
-  // Safely mirror to Supabase if configured without throwing
+  // AWAIT the Supabase save — this is the real persistent store on Vercel.
+  // Serverless functions can freeze/terminate right after the response is sent,
+  // so a fire-and-forget write here can get silently dropped.
+  let remoteSuccess = false;
   if (USE_SUPABASE) {
-    saveVolunteersToSupabase(volunteers).catch((err) => {
-      console.warn('[Storage] Supabase background save notice:', err?.message || err);
-    });
+    try {
+      remoteSuccess = await saveVolunteersToSupabase(volunteers);
+      if (!remoteSuccess) {
+        console.error('[Storage] Supabase save returned false');
+      }
+    } catch (err: any) {
+      console.error('[Storage] Supabase save failed:', err?.message || err);
+    }
   }
 
-  // Safely mirror to Vercel Blob if configured without throwing
+  // AWAIT the Vercel Blob save too, for the same reason
   if (USE_VERCEL_BLOB) {
-    saveVolunteersToVercelBlob(volunteers).catch((err) => {
-      console.warn('[Storage] Vercel Blob background save notice:', err?.message || err);
-    });
+    try {
+      const blobSuccess = await saveVolunteersToVercelBlob(volunteers);
+      remoteSuccess = remoteSuccess || blobSuccess;
+    } catch (err: any) {
+      console.error('[Storage] Vercel Blob save failed:', err?.message || err);
+    }
   }
 
+  // On serverless, the remote (persistent) save is what actually matters.
+  // Fall back to local success only when neither Supabase nor Blob is configured.
+  if (USE_SUPABASE || USE_VERCEL_BLOB) {
+    return remoteSuccess;
+  }
   return localSuccess;
 }
 
