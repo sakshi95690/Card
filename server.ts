@@ -209,6 +209,30 @@ async function uploadImageToSupabase(
       return null;
     }
 
+    // Also save JPEG companion for older viewers and maximum URL compatibility
+    try {
+      const jpegOptimized = await sharp(rawBuffer)
+        .rotate()
+        .resize({
+          width: isCard ? 1400 : 1600,
+          height: isCard ? 2000 : 1600,
+          fit: 'inside',
+          withoutEnlargement: true,
+        })
+        .jpeg({ quality: 85 })
+        .toBuffer();
+
+      await client.storage
+        .from(BUCKET_NAME)
+        .upload(`${volunteerId}/${cleanFilename}.jpg`, jpegOptimized, {
+          contentType: 'image/jpeg',
+          upsert: true,
+          cacheControl: '3600',
+        });
+    } catch {
+      // Non-critical companion upload
+    }
+
     const { data: publicData } = client.storage.from(BUCKET_NAME).getPublicUrl(storagePath);
     return publicData.publicUrl;
   } catch (err: any) {
