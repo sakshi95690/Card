@@ -49,7 +49,7 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
   const [previewVolunteer, setPreviewVolunteer] = useState<Volunteer | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDepartment, setSelectedDepartment] = useState<string>('ALL');
-  const [statusFilter, setStatusFilter] = useState<'ACTIVE' | 'DEACTIVATED' | 'ALL'>('ACTIVE');
+  const [statusFilter, setStatusFilter] = useState<'ACTIVE' | 'DEACTIVATED' | 'ALL'>('ALL');
 
   // Deactivation confirmation modal state
   const [deactivatingVolunteer, setDeactivatingVolunteer] = useState<Volunteer | null>(null);
@@ -782,6 +782,14 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
                         alt={vol.name}
                         crossOrigin="anonymous"
                         referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          if (target.src.endsWith('.jpg')) {
+                            target.src = target.src.replace(/\.jpg$/, '.webp');
+                          } else if (target.src.endsWith('.webp')) {
+                            target.src = target.src.replace(/\.webp$/, '.jpg');
+                          }
+                        }}
                         className="w-full h-full object-cover"
                       />
                       {isDeactivated && (
@@ -1047,6 +1055,14 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
                       alt={vol.name}
                       crossOrigin="anonymous"
                       referrerPolicy="no-referrer"
+                      onError={(e) => {
+                        const target = e.currentTarget;
+                        if (target.src.endsWith('.jpg')) {
+                          target.src = target.src.replace(/\.jpg$/, '.webp');
+                        } else if (target.src.endsWith('.webp')) {
+                          target.src = target.src.replace(/\.webp$/, '.jpg');
+                        }
+                      }}
                       className="w-full h-full object-cover"
                     />
                   </div>
