@@ -23,9 +23,9 @@ app.use((req, res, next) => {
   next();
 });
 
-// Body parser with 25mb limit for volunteer photo/card uploads
-app.use(express.json({ limit: '25mb' }));
-app.use(express.urlencoded({ extended: true, limit: '25mb' }));
+// Body parser with 50mb limit for volunteer photo/card uploads
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 interface VolunteerRecord {
   id: string;
@@ -599,50 +599,43 @@ function saveVolunteersToFile(volunteers: VolunteerRecord[]): boolean {
   }
 }
 
-// ---- Unified storage API with seamless Vercel Blob -> Supabase fallback ----
+// ---- Unified storage API with seamless Vercel Blob -> Supabase -> Local File fallback ----
 async function loadVolunteers(): Promise<VolunteerRecord[]> {
   let list: VolunteerRecord[] = [];
 
-  // 1. Try Supabase Storage first (if configured)
-  if (USE_SUPABASE) {
+  // 1. Try local filesystem replica first (fast and always reliable in the running container)
+  try {
+    const fileList = loadVolunteersFromFile();
+    if (fileList.length > 0) {
+      list = fileList;
+    }
+  } catch (fileErr) {
+    console.warn('[Storage] Error reading local file:', fileErr);
+  }
+
+  // 2. If local list is empty and Supabase is configured, try Supabase Storage
+  if (list.length === 0 && USE_SUPABASE) {
     try {
-      list = await loadVolunteersFromSupabase();
+      const sbList = await loadVolunteersFromSupabase();
+      if (sbList && sbList.length > 0) {
+        list = sbList;
+        saveVolunteersToFile(sbList);
+      }
     } catch (err) {
       console.warn('[Storage] Error reading Supabase database:', err);
     }
   }
 
-  // 2. If Supabase is empty or not configured, check Vercel Blob (Restore old data visibility!)
+  // 3. If still empty and Vercel Blob is configured, check Vercel Blob
   if (list.length === 0 && USE_VERCEL_BLOB) {
     try {
       const blobList = await loadVolunteersFromVercelBlob();
-      if (blobList.length > 0) {
-        console.log(`[Storage] Restored ${blobList.length} existing records from Vercel Blob.`);
+      if (blobList && blobList.length > 0) {
         list = blobList;
-
-        // If Supabase is configured, automatically mirror records into Supabase so they are immediately available
-        if (USE_SUPABASE) {
-          saveVolunteersToSupabase(blobList).catch((mirrorErr) => {
-            console.warn('[Storage] Auto-sync to Supabase warning:', mirrorErr);
-          });
-        }
+        saveVolunteersToFile(blobList);
       }
     } catch (err) {
       console.warn('[Storage] Error loading from Vercel Blob:', err);
-    }
-  }
-
-  // 3. Fallback to local filesystem replica
-  if (list.length === 0) {
-    const fileList = loadVolunteersFromFile();
-    if (fileList.length > 0) {
-      list = fileList;
-      if (USE_SUPABASE) {
-        saveVolunteersToSupabase(fileList).catch(() => {});
-      }
-      if (USE_VERCEL_BLOB) {
-        saveVolunteersToVercelBlob(fileList).catch(() => {});
-      }
     }
   }
 
@@ -654,22 +647,24 @@ async function loadVolunteers(): Promise<VolunteerRecord[]> {
 }
 
 async function saveVolunteers(volunteers: VolunteerRecord[]): Promise<boolean> {
-  let success = false;
+  // Always save local file replica first (100% reliable)
+  const localSuccess = saveVolunteersToFile(volunteers);
 
+  // Safely mirror to Supabase if configured without throwing
   if (USE_SUPABASE) {
-    const supabaseSuccess = await saveVolunteersToSupabase(volunteers);
-    if (supabaseSuccess) success = true;
+    saveVolunteersToSupabase(volunteers).catch((err) => {
+      console.warn('[Storage] Supabase background save notice:', err?.message || err);
+    });
   }
 
+  // Safely mirror to Vercel Blob if configured without throwing
   if (USE_VERCEL_BLOB) {
-    const blobSuccess = await saveVolunteersToVercelBlob(volunteers);
-    if (blobSuccess) success = true;
+    saveVolunteersToVercelBlob(volunteers).catch((err) => {
+      console.warn('[Storage] Vercel Blob background save notice:', err?.message || err);
+    });
   }
 
-  // Always save local file replica
-  saveVolunteersToFile(volunteers);
-
-  return USE_SUPABASE || USE_VERCEL_BLOB ? success : true;
+  return localSuccess;
 }
 
 async function generateVolunteerId(currentList: VolunteerRecord[]): Promise<string> {
@@ -1010,20 +1005,27 @@ const uploadCardImageHandler = async (req: express.Request, res: express.Respons
     const ext = format === 'png' ? 'png' : format === 'jpg' || format === 'jpeg' ? 'jpg' : 'webp';
 
     if (USE_SUPABASE) {
-      const uploaded = await uploadImageToSupabase(list[index].id, cardImage, `card.${ext}`);
-      if (uploaded) {
-        publicCardUrl = uploaded;
-        list[index].cardImageUrl = uploaded;
-        await saveVolunteers(list);
+      try {
+        const uploaded = await uploadImageToSupabase(list[index].id, cardImage, `card.${ext}`);
+        if (uploaded) {
+          publicCardUrl = uploaded;
+        }
+      } catch (sbErr) {
+        console.warn('[Storage] Card upload to Supabase warning:', sbErr);
       }
     } else if (USE_VERCEL_BLOB) {
-      const uploaded = await uploadImageToVercelBlob(list[index].id, cardImage, `card.${ext}`);
-      if (uploaded) {
-        publicCardUrl = uploaded;
-        list[index].cardImageUrl = uploaded;
-        await saveVolunteers(list);
+      try {
+        const uploaded = await uploadImageToVercelBlob(list[index].id, cardImage, `card.${ext}`);
+        if (uploaded) {
+          publicCardUrl = uploaded;
+        }
+      } catch (vbErr) {
+        console.warn('[Storage] Card upload to Vercel Blob warning:', vbErr);
       }
     }
+
+    list[index].cardImageUrl = publicCardUrl;
+    await saveVolunteers(list);
 
     return res.json({
       success: true,
