@@ -60,7 +60,7 @@ export const DEPARTMENTS = [
   'Security',
   'Shoe Stall',
   'Sound',
-  'Tent Cleaning'
+  'Tent Cleaning',
   'V. Prasadam Distribution',
   'Volunteer Care Seva',
   'Welcome Seva',
