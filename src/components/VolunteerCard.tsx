@@ -135,6 +135,14 @@ export default function VolunteerCard({
                   alt={volunteer.name}
                   crossOrigin="anonymous"
                   referrerPolicy="no-referrer"
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    if (target.src.endsWith('.jpg')) {
+                      target.src = target.src.replace(/\.jpg$/, '.webp');
+                    } else if (target.src.endsWith('.webp')) {
+                      target.src = target.src.replace(/\.webp$/, '.jpg');
+                    }
+                  }}
                   className="w-full h-full object-cover"
                 />
               </div>
