@@ -25,6 +25,8 @@ import {
   RotateCcw,
   UserX,
   FileSpreadsheet,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
 import { DEPARTMENTS, Volunteer } from '../types';
 import {
@@ -32,8 +34,12 @@ import {
   subscribeToVolunteerUpdates,
   deactivateVolunteerCard,
   updateVolunteerStatus,
+  deleteVolunteerPermanently,
+  bulkDeleteVolunteersPermanently,
 } from '../lib/storage';
 import VolunteerCard from './VolunteerCard';
+import EditVolunteerModal from './EditVolunteerModal';
+import DeleteConfirmModal from './DeleteConfirmModal';
 import { AppLogo } from './AppLogo';
 
 interface AdminDashboardProps {
@@ -51,15 +57,34 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
   const [selectedDepartment, setSelectedDepartment] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<'ACTIVE' | 'DEACTIVATED' | 'ALL'>('ALL');
 
+  // Edit volunteer modal state
+  const [editingVolunteer, setEditingVolunteer] = useState<Volunteer | null>(null);
+
+  // Permanent Deletion modal state
+  const [deletingVolunteers, setDeletingVolunteers] = useState<Volunteer[]>([]);
+  const [isDeletingPermanently, setIsDeletingPermanently] = useState(false);
+
   // Deactivation confirmation modal state
   const [deactivatingVolunteer, setDeactivatingVolunteer] = useState<Volunteer | null>(null);
   const [isDeactivating, setIsDeactivating] = useState(false);
-  const [deactivateSuccessMsg, setDeactivateSuccessMsg] = useState<string | null>(null);
+
+  // Generic action notification
+  const [actionNotification, setActionNotification] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
 
   // Bulk Image Export State
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState({ current: 0, total: 0 });
   const [exportSuccessMsg, setExportSuccessMsg] = useState<string | null>(null);
+
+  const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
+    setActionNotification({ type, message });
+    setTimeout(() => {
+      setActionNotification((prev) => (prev?.message === message ? null : prev));
+    }, 4500);
+  };
 
   // Load volunteers list from server
   const loadData = useCallback(async (showRefreshing = false) => {
@@ -166,6 +191,77 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
     );
   };
 
+  // Handle Edit Save Success
+  const handleSaveEditSuccess = (updated: Volunteer) => {
+    setVolunteers((prev) => prev.map((v) => (v.id === updated.id ? updated : v)));
+    if (previewVolunteer?.id === updated.id) {
+      setPreviewVolunteer(updated);
+    }
+    setEditingVolunteer(null);
+    showNotification(`Volunteer card for ${updated.name} (${updated.id}) updated successfully.`);
+  };
+
+  // Open single volunteer permanent delete modal
+  const handleOpenSingleDeleteModal = (vol: Volunteer) => {
+    setDeletingVolunteers([vol]);
+  };
+
+  // Open bulk permanent delete modal
+  const handleOpenBulkDeleteModal = () => {
+    const selectedList = volunteers.filter((v) => selectedIds.includes(v.id));
+    if (selectedList.length === 0) return;
+    setDeletingVolunteers(selectedList);
+  };
+
+  // Execute Permanent Delete (Single or Bulk)
+  const handleConfirmPermanentDelete = async () => {
+    if (deletingVolunteers.length === 0) return;
+
+    try {
+      setIsDeletingPermanently(true);
+
+      if (deletingVolunteers.length === 1) {
+        const target = deletingVolunteers[0];
+        const success = await deleteVolunteerPermanently(target.id);
+        if (success) {
+          setVolunteers((prev) => prev.filter((v) => v.id !== target.id));
+          setSelectedIds((prev) => prev.filter((id) => id !== target.id));
+          if (previewVolunteer?.id === target.id) {
+            setPreviewVolunteer(null);
+          }
+          if (editingVolunteer?.id === target.id) {
+            setEditingVolunteer(null);
+          }
+          showNotification(`Card for ${target.name} (${target.id}) permanently deleted from storage.`);
+        } else {
+          showNotification('Failed to permanently delete volunteer card. Check network and retry.', 'error');
+        }
+      } else {
+        const targetIds = deletingVolunteers.map((v) => v.id);
+        const result = await bulkDeleteVolunteersPermanently(targetIds);
+        if (result.success) {
+          setVolunteers((prev) => prev.filter((v) => !targetIds.includes(v.id)));
+          setSelectedIds([]);
+          if (previewVolunteer && targetIds.includes(previewVolunteer.id)) {
+            setPreviewVolunteer(null);
+          }
+          if (editingVolunteer && targetIds.includes(editingVolunteer.id)) {
+            setEditingVolunteer(null);
+          }
+          showNotification(`Successfully deleted ${result.deletedCount} cards permanently from storage.`);
+        } else {
+          showNotification(result.message || 'Failed to delete selected cards.', 'error');
+        }
+      }
+    } catch (err: any) {
+      console.error('Error during permanent delete:', err);
+      showNotification(err?.message || 'Error occurred while permanently deleting card(s).', 'error');
+    } finally {
+      setIsDeletingPermanently(false);
+      setDeletingVolunteers([]);
+    }
+  };
+
   // Handle Deactivate Action
   const handleOpenDeactivateModal = (vol: Volunteer) => {
     setDeactivatingVolunteer(vol);
@@ -182,27 +278,26 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
             v.id === deactivatingVolunteer.id ? { ...v, status: 'Deactivated' } : v
           )
         );
-        setDeactivateSuccessMsg(
-          `Volunteer card for ${deactivatingVolunteer.name} (${deactivatingVolunteer.id}) was successfully deactivated.`
+        showNotification(
+          `Volunteer card for ${deactivatingVolunteer.name} (${deactivatingVolunteer.id}) was deactivated.`
         );
-        setTimeout(() => setDeactivateSuccessMsg(null), 4000);
 
         if (previewVolunteer?.id === deactivatingVolunteer.id) {
           setPreviewVolunteer((prev) => (prev ? { ...prev, status: 'Deactivated' } : null));
         }
       } else {
-        alert('Failed to deactivate volunteer card. Please check server connection.');
+        showNotification('Failed to deactivate volunteer card. Please check connection.', 'error');
       }
     } catch (err) {
       console.error('Error deactivating card:', err);
-      alert('Error occurred while deactivating volunteer card.');
+      showNotification('Error occurred while deactivating volunteer card.', 'error');
     } finally {
       setIsDeactivating(false);
       setDeactivatingVolunteer(null);
     }
   };
 
-  // Handle Reactivate Action (if admin wants to restore)
+  // Handle Reactivate Action
   const handleReactivateCard = async (vol: Volunteer) => {
     try {
       const success = await updateVolunteerStatus(vol.id, 'Active');
@@ -210,8 +305,7 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
         setVolunteers((prev) =>
           prev.map((v) => (v.id === vol.id ? { ...v, status: 'Active' } : v))
         );
-        setDeactivateSuccessMsg(`Volunteer card for ${vol.name} (${vol.id}) is now Active.`);
-        setTimeout(() => setDeactivateSuccessMsg(null), 4000);
+        showNotification(`Volunteer card for ${vol.name} (${vol.id}) is now Active.`);
 
         if (previewVolunteer?.id === vol.id) {
           setPreviewVolunteer((prev) => (prev ? { ...prev, status: 'Active' } : null));
@@ -219,6 +313,7 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
       }
     } catch (err) {
       console.error('Error reactivating card:', err);
+      showNotification('Failed to reactivate card.', 'error');
     }
   };
 
@@ -435,6 +530,20 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
 
           {/* Desktop Actions & Export */}
           <div className="flex flex-wrap items-center gap-2">
+            {/* Delete Selected (Bulk Action) */}
+            {isAnySelected && (
+              <button
+                type="button"
+                id="bulk-delete-permanently-btn"
+                onClick={handleOpenBulkDeleteModal}
+                title="Permanently delete selected cards from storage"
+                className="w-full sm:w-auto py-2 px-3.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer min-h-[36px] animate-in fade-in"
+              >
+                <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                <span>Delete Selected ({selectedIds.length})</span>
+              </button>
+            )}
+
             {/* Export CSV Button */}
             <button
               type="button"
@@ -645,7 +754,34 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
         )}
       </div>
 
-      {/* Success Notification */}
+      {/* Action Notification */}
+      {actionNotification && (
+        <div
+          className={`p-3 rounded-2xl text-xs font-semibold flex items-center justify-between gap-2 animate-in fade-in shadow-2xs border ${
+            actionNotification.type === 'error'
+              ? 'bg-rose-50 border-rose-200 text-rose-800'
+              : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {actionNotification.type === 'error' ? (
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            ) : (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            )}
+            <span>{actionNotification.message}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionNotification(null)}
+            className="text-[11px] font-bold text-slate-500 hover:text-slate-800 cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Export Success Notification */}
       {exportSuccessMsg && (
         <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in shadow-2xs">
           <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -653,35 +789,41 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
         </div>
       )}
 
-      {/* Deactivation / Status Change Notification */}
-      {deactivateSuccessMsg && (
-        <div className="p-2.5 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in shadow-2xs">
-          <CheckCircle2 className="w-4 h-4 text-amber-600 shrink-0" />
-          <span>{deactivateSuccessMsg}</span>
-        </div>
-      )}
-
       {/* Selection Toolbar */}
       {volunteers.length > 0 && (
-        <div className="flex items-center justify-between px-1 gap-2">
-          <button
-            type="button"
-            id="select-all-btn"
-            onClick={handleToggleSelectAll}
-            className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer shadow-2xs min-h-[38px]"
-          >
-            {isAllSelected ? (
-              <>
-                <CheckSquare className="w-4 h-4 text-[#1E40AF] shrink-0" />
-                <span>Deselect All</span>
-              </>
-            ) : (
-              <>
-                <Square className="w-4 h-4 text-slate-400 shrink-0" />
-                <span>Select All ({filteredVolunteers.length})</span>
-              </>
+        <div className="flex items-center justify-between px-1 gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              id="select-all-btn"
+              onClick={handleToggleSelectAll}
+              className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer shadow-2xs min-h-[38px]"
+            >
+              {isAllSelected ? (
+                <>
+                  <CheckSquare className="w-4 h-4 text-[#1E40AF] shrink-0" />
+                  <span>Deselect All</span>
+                </>
+              ) : (
+                <>
+                  <Square className="w-4 h-4 text-slate-400 shrink-0" />
+                  <span>Select All ({filteredVolunteers.length})</span>
+                </>
+              )}
+            </button>
+
+            {isAnySelected && (
+              <button
+                type="button"
+                id="selection-bulk-delete-btn"
+                onClick={handleOpenBulkDeleteModal}
+                className="px-3 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs min-h-[38px]"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                <span>Delete Selected ({selectedIds.length})</span>
+              </button>
             )}
-          </button>
+          </div>
 
           <span className="text-[11px] text-slate-500 text-right">
             Showing {filteredVolunteers.length} of {volunteers.length} cards
@@ -824,6 +966,13 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
                             <span>Active</span>
                           </span>
                         )}
+
+                        {/* Card Workflow Status Badge */}
+                        {vol.cardStatus && vol.cardStatus !== 'Generated' && (
+                          <span className="px-2 py-0.5 rounded-md bg-sky-50 border border-sky-200 font-bold text-sky-800 text-[10px]">
+                            {vol.cardStatus === 'Printed' ? '🖨️ Printed' : '🎖️ Issued'}
+                          </span>
+                        )}
                       </div>
 
                       <div className="flex flex-wrap items-center gap-1.5 mt-1">
@@ -851,28 +1000,43 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
                     </div>
                   </div>
 
-                  {/* Actions: View Card & Deactivate/Reactivate */}
-                  <div className="flex items-center justify-end gap-1.5 pl-7 sm:pl-0 shrink-0">
+                  {/* Action Buttons: View, Edit, Deactivate/Reactivate, Delete */}
+                  <div className="flex items-center justify-end gap-1.5 pl-7 sm:pl-0 shrink-0 flex-wrap">
+                    {/* View Card Button */}
                     <button
                       type="button"
                       id={`view-card-btn-${vol.id}`}
                       onClick={() => setPreviewVolunteer(vol)}
-                      className="px-3 py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-[#1E40AF] border border-blue-200 font-bold text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs min-h-[36px]"
+                      title="View Volunteer Card"
+                      className="px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl bg-blue-50 hover:bg-blue-100 text-[#1E40AF] border border-blue-200 font-bold text-xs transition-colors flex items-center justify-center gap-1 cursor-pointer shadow-2xs min-h-[34px]"
                     >
                       <Eye className="w-3.5 h-3.5" />
-                      <span>View Card</span>
+                      <span className="hidden sm:inline">View</span>
                     </button>
 
+                    {/* Edit Card Button */}
+                    <button
+                      type="button"
+                      id={`edit-card-btn-${vol.id}`}
+                      onClick={() => setEditingVolunteer(vol)}
+                      title="Edit volunteer details and photo"
+                      className="px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 font-bold text-xs transition-colors flex items-center justify-center gap-1 cursor-pointer shadow-2xs min-h-[34px]"
+                    >
+                      <Pencil className="w-3.5 h-3.5 text-amber-700" />
+                      <span>Edit</span>
+                    </button>
+
+                    {/* Deactivate / Reactivate Button */}
                     {isDeactivated ? (
                       <button
                         type="button"
                         id={`reactivate-card-btn-${vol.id}`}
                         onClick={() => handleReactivateCard(vol)}
                         title="Reactivate this volunteer card"
-                        className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-800 text-slate-700 border border-slate-200 font-bold text-xs transition-all flex items-center justify-center gap-1 cursor-pointer shadow-2xs min-h-[36px]"
+                        className="px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl bg-slate-100 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-800 text-slate-700 border border-slate-200 font-bold text-xs transition-all flex items-center justify-center gap-1 cursor-pointer shadow-2xs min-h-[34px]"
                       >
                         <RotateCcw className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Reactivate</span>
+                        <span className="hidden sm:inline">Reactivate</span>
                       </button>
                     ) : (
                       <button
@@ -880,12 +1044,23 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
                         id={`deactivate-card-btn-${vol.id}`}
                         onClick={() => handleOpenDeactivateModal(vol)}
                         title="Deactivate this volunteer card"
-                        className="px-3 py-2 rounded-xl bg-white hover:bg-rose-50 hover:border-rose-300 text-rose-700 border border-slate-200 font-bold text-xs transition-all flex items-center justify-center gap-1 cursor-pointer shadow-2xs min-h-[36px]"
+                        className="px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl bg-white hover:bg-rose-50 hover:border-rose-300 text-rose-700 border border-slate-200 font-bold text-xs transition-all flex items-center justify-center gap-1 cursor-pointer shadow-2xs min-h-[34px]"
                       >
                         <Ban className="w-3.5 h-3.5 text-rose-600" />
-                        <span>Deactivate</span>
+                        <span className="hidden sm:inline">Deactivate</span>
                       </button>
                     )}
+
+                    {/* Delete Permanently Button */}
+                    <button
+                      type="button"
+                      id={`delete-card-permanently-btn-${vol.id}`}
+                      onClick={() => handleOpenSingleDeleteModal(vol)}
+                      title="Permanently delete this card from storage"
+                      className="px-2 sm:px-2.5 py-1.5 sm:py-2 rounded-xl bg-slate-50 hover:bg-rose-100 hover:text-rose-800 text-slate-500 border border-slate-200 hover:border-rose-300 font-bold text-xs transition-colors flex items-center justify-center gap-1 cursor-pointer shadow-2xs min-h-[34px]"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                    </button>
                   </div>
                 </div>
               );
@@ -893,6 +1068,29 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
           </div>
         )}
       </div>
+
+      {/* Modal: Edit Volunteer Details & Photo */}
+      {editingVolunteer && (
+        <EditVolunteerModal
+          volunteer={editingVolunteer}
+          onClose={() => setEditingVolunteer(null)}
+          onSaveSuccess={handleSaveEditSuccess}
+          onRequestDelete={(vol) => {
+            setEditingVolunteer(null);
+            handleOpenSingleDeleteModal(vol);
+          }}
+        />
+      )}
+
+      {/* Modal: Permanent Delete Confirmation (Single or Bulk) */}
+      {deletingVolunteers.length > 0 && (
+        <DeleteConfirmModal
+          volunteersToDelete={deletingVolunteers}
+          isDeleting={isDeletingPermanently}
+          onCancel={() => setDeletingVolunteers([])}
+          onConfirm={handleConfirmPermanentDelete}
+        />
+      )}
 
       {/* Confirmation Modal: Deactivate Volunteer Card */}
       {deactivatingVolunteer && (
@@ -978,6 +1176,14 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
               volunteer={previewVolunteer}
               isAdminView={true}
               onClose={() => setPreviewVolunteer(null)}
+              onEdit={(vol) => {
+                setPreviewVolunteer(null);
+                setEditingVolunteer(vol);
+              }}
+              onDelete={(vol) => {
+                setPreviewVolunteer(null);
+                handleOpenSingleDeleteModal(vol);
+              }}
             />
           </div>
         </div>
