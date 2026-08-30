@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import sharp from 'sharp';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { list as listVercelBlobs, put as putVercelBlob } from '@vercel/blob';
+import { list as listVercelBlobs, put as putVercelBlob, del as delVercelBlob } from '@vercel/blob';
 
 const app = express();
 const PORT = 3000;
@@ -335,6 +335,72 @@ async function deleteVolunteerFilesFromSupabase(
     console.error('[Supabase Storage] Exception during delete cleanup:', err?.message || err);
     return false;
   }
+}
+
+/**
+ * Delete all files associated with a volunteer from Vercel Blob storage
+ */
+async function deleteVolunteerFilesFromVercelBlob(
+  volunteerId: string,
+  imageUrl?: string,
+  cardImageUrl?: string
+): Promise<boolean> {
+  if (!BLOB_READ_WRITE_TOKEN) return false;
+
+  try {
+    const urlsToDelete = new Set<string>();
+
+    if (imageUrl && (imageUrl.includes('blob.vercel-storage.com') || imageUrl.includes('public.blob.vercel'))) {
+      urlsToDelete.add(imageUrl);
+    }
+    if (cardImageUrl && (cardImageUrl.includes('blob.vercel-storage.com') || cardImageUrl.includes('public.blob.vercel'))) {
+      urlsToDelete.add(cardImageUrl);
+    }
+
+    try {
+      const { blobs } = await listVercelBlobs({
+        token: BLOB_READ_WRITE_TOKEN,
+        prefix: volunteerId,
+      });
+
+      for (const blob of blobs) {
+        urlsToDelete.add(blob.url);
+      }
+    } catch (listErr) {
+      console.warn(`[Vercel Blob] Notice listing prefix ${volunteerId}:`, listErr);
+    }
+
+    if (urlsToDelete.size > 0) {
+      await delVercelBlob(Array.from(urlsToDelete), {
+        token: BLOB_READ_WRITE_TOKEN,
+      });
+      console.log(`[Vercel Blob] Deleted ${urlsToDelete.size} files for ${volunteerId}`);
+    }
+    return true;
+  } catch (err: any) {
+    console.warn(`[Vercel Blob] Error deleting files for ${volunteerId}:`, err?.message || err);
+    return false;
+  }
+}
+
+/**
+ * Unified permanent cleanup across all storage backends (Supabase, Vercel Blob)
+ */
+async function deleteVolunteerFilesFromStorage(
+  volunteerId: string,
+  imageUrl?: string,
+  cardImageUrl?: string
+): Promise<void> {
+  const cleanupTasks: Promise<any>[] = [];
+
+  if (USE_SUPABASE) {
+    cleanupTasks.push(deleteVolunteerFilesFromSupabase(volunteerId, imageUrl));
+  }
+  if (USE_VERCEL_BLOB) {
+    cleanupTasks.push(deleteVolunteerFilesFromVercelBlob(volunteerId, imageUrl, cardImageUrl));
+  }
+
+  await Promise.allSettled(cleanupTasks);
 }
 
 /**
@@ -1061,6 +1127,168 @@ apiRouter.post('/volunteers/:id/card-image', uploadCardImageHandler);
 apiRouter.post('/volunteers/:id/upload-card', uploadCardImageHandler);
 apiRouter.post('/volunteer/:id/card-image', uploadCardImageHandler);
 
+// Update full volunteer record (Admin action)
+const updateVolunteerHandler = async (req: express.Request, res: express.Response) => {
+  try {
+    const { id } = req.params;
+    const body = req.body || {};
+    const { name, phone, email, hodName, department, imageUrl, status, cardStatus } = body;
+
+    if (!id) {
+      return res.status(400).json({ success: false, error: 'Volunteer ID is required' });
+    }
+
+    const list = await loadVolunteers();
+    const index = list.findIndex((v) => v.id.toUpperCase() === id.toUpperCase());
+    if (index === -1) {
+      return res.status(404).json({ success: false, error: 'Volunteer not found' });
+    }
+
+    const existing = list[index];
+
+    // Validate phone number if provided
+    let formattedPhone = existing.phone;
+    if (phone !== undefined && phone !== null && String(phone).trim().length > 0) {
+      const cleanPhone = String(phone).replace(/[\s\-()]/g, '');
+      const indianPhoneRegex = /^(?:\+91|91|0)?[6-9]\d{9}$/;
+      if (!cleanPhone || !indianPhoneRegex.test(cleanPhone)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Please enter a valid 10-digit Indian mobile number',
+        });
+      }
+
+      formattedPhone = cleanPhone;
+      if (formattedPhone.startsWith('+91')) {
+        formattedPhone = formattedPhone.slice(3);
+      } else if (formattedPhone.startsWith('91') && formattedPhone.length === 12) {
+        formattedPhone = formattedPhone.slice(2);
+      } else if (formattedPhone.startsWith('0') && formattedPhone.length === 11) {
+        formattedPhone = formattedPhone.slice(1);
+      }
+
+      // Check if another volunteer has this phone number
+      const duplicateOther = list.find((v) => {
+        if (v.id.toUpperCase() === id.toUpperCase()) return false;
+        const vPhoneClean = String(v.phone || '').replace(/[\s\-()+]/g, '');
+        const normalizedVPhone =
+          vPhoneClean.length === 12 && vPhoneClean.startsWith('91')
+            ? vPhoneClean.slice(2)
+            : vPhoneClean.length === 11 && vPhoneClean.startsWith('0')
+            ? vPhoneClean.slice(1)
+            : vPhoneClean;
+        return normalizedVPhone === formattedPhone;
+      });
+
+      if (duplicateOther) {
+        return res.status(409).json({
+          success: false,
+          error: `Mobile number +91 ${formattedPhone} is already registered with another volunteer (${duplicateOther.name} - ${duplicateOther.id}).`,
+        });
+      }
+    }
+
+    // Validate name if provided
+    let finalName = existing.name;
+    if (name !== undefined) {
+      if (typeof name !== 'string' || name.trim().length === 0) {
+        return res.status(400).json({ success: false, error: 'Full name is required' });
+      }
+      finalName = name.trim();
+    }
+
+    // Validate department if provided
+    let finalDepartment = existing.department;
+    if (department !== undefined) {
+      if (typeof department !== 'string' || department.trim().length === 0 || department === '-- Select --') {
+        return res.status(400).json({ success: false, error: 'Valid department is required' });
+      }
+      finalDepartment = department.trim();
+    }
+
+    // HOD Name
+    let finalHodName = existing.hodName;
+    if (hodName !== undefined) {
+      finalHodName = typeof hodName === 'string' ? hodName.trim() : '';
+    }
+
+    // Email
+    let finalEmail = existing.email || '';
+    if (email !== undefined) {
+      finalEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    }
+
+    // Image upload if new base64 image provided
+    let finalImageUrl = existing.imageUrl;
+    if (imageUrl && typeof imageUrl === 'string' && imageUrl !== existing.imageUrl) {
+      if (imageUrl.startsWith('data:')) {
+        try {
+          if (USE_SUPABASE) {
+            const uploadedUrl = await uploadImageToSupabase(existing.id, imageUrl, 'photo');
+            if (uploadedUrl) finalImageUrl = uploadedUrl;
+          } else if (USE_VERCEL_BLOB) {
+            const uploadedUrl = await uploadImageToVercelBlob(existing.id, imageUrl, 'photo');
+            if (uploadedUrl) finalImageUrl = uploadedUrl;
+          } else {
+            finalImageUrl = imageUrl;
+          }
+        } catch (uploadErr) {
+          console.warn(`[Storage] Photo update failed for ${existing.id}:`, uploadErr);
+          finalImageUrl = imageUrl;
+        }
+      } else {
+        finalImageUrl = imageUrl;
+      }
+    }
+
+    // Status
+    let finalStatus = existing.status;
+    if (status && ['Verified', 'Pending', 'Active', 'Deactivated'].includes(status)) {
+      finalStatus = status;
+    }
+
+    // Card status
+    let finalCardStatus = existing.cardStatus || 'Generated';
+    if (cardStatus && ['Generated', 'Printed', 'Issued'].includes(cardStatus)) {
+      finalCardStatus = cardStatus;
+    }
+
+    const updatedVolunteer: VolunteerRecord = {
+      ...existing,
+      name: finalName,
+      phone: formattedPhone,
+      email: finalEmail,
+      hodName: finalHodName,
+      department: finalDepartment,
+      imageUrl: finalImageUrl,
+      status: finalStatus,
+      cardStatus: finalCardStatus,
+    };
+
+    list[index] = updatedVolunteer;
+    const saved = await saveVolunteers(list);
+    if (!saved) {
+      return res.status(500).json({ success: false, error: 'Could not save updated volunteer to storage' });
+    }
+
+    console.log(`[Volunteer Updated] ${updatedVolunteer.id} - ${updatedVolunteer.name}`);
+
+    return res.json({
+      success: true,
+      message: `Volunteer ${updatedVolunteer.name} (${updatedVolunteer.id}) updated successfully`,
+      volunteer: updatedVolunteer,
+    });
+  } catch (err: any) {
+    console.error('Error in updateVolunteerHandler:', err);
+    return res.status(500).json({ success: false, error: 'Server error updating volunteer' });
+  }
+};
+
+apiRouter.put('/volunteers/:id', updateVolunteerHandler);
+apiRouter.put('/volunteer/:id', updateVolunteerHandler);
+apiRouter.patch('/volunteers/:id/edit', updateVolunteerHandler);
+apiRouter.patch('/volunteer/:id/edit', updateVolunteerHandler);
+
 // Update volunteer card status or status (e.g. Generated -> Printed -> Issued)
 const patchStatusHandler = async (req: express.Request, res: express.Response) => {
   try {
@@ -1099,7 +1327,7 @@ const patchStatusHandler = async (req: express.Request, res: express.Response) =
 apiRouter.patch('/volunteers/:id/status', patchStatusHandler);
 apiRouter.patch('/volunteer/:id/status', patchStatusHandler);
 
-// Delete volunteer (Admin action) - Also cleans up Supabase Storage files
+// Delete volunteer permanently (Admin action) - Cleans up database + Supabase Storage + Vercel Blob
 const deleteVolunteerHandler = async (req: express.Request, res: express.Response) => {
   try {
     const { id } = req.params;
@@ -1115,16 +1343,17 @@ const deleteVolunteerHandler = async (req: express.Request, res: express.Respons
       return res.status(500).json({ success: false, error: 'Could not save changes to storage' });
     }
 
-    // Clean up associated files from Supabase Storage asynchronously
-    if (USE_SUPABASE) {
-      deleteVolunteerFilesFromSupabase(removed.id, removed.imageUrl).catch((err) => {
-        console.warn(`[Supabase Storage] Cleanup notice for deleted volunteer ${removed.id}:`, err);
-      });
-    }
+    // Deep permanent cleanup across storage backends
+    deleteVolunteerFilesFromStorage(removed.id, removed.imageUrl, removed.cardImageUrl).catch((err) => {
+      console.warn(`[Storage Cleanup] Notice deleting files for ${removed.id}:`, err);
+    });
+
+    console.log(`[Volunteer Permanently Deleted] ${removed.id} - ${removed.name}`);
 
     return res.json({
       success: true,
-      message: `Volunteer ${removed.name} (${removed.id}) deleted successfully`,
+      message: `Volunteer ${removed.name} (${removed.id}) permanently deleted from storage`,
+      volunteerId: removed.id,
     });
   } catch (err: any) {
     console.error('Error in deleteVolunteerHandler:', err);
@@ -1134,6 +1363,51 @@ const deleteVolunteerHandler = async (req: express.Request, res: express.Respons
 
 apiRouter.delete('/volunteers/:id', deleteVolunteerHandler);
 apiRouter.delete('/volunteer/:id', deleteVolunteerHandler);
+
+// Bulk delete volunteers permanently (Admin action)
+const bulkDeleteVolunteersHandler = async (req: express.Request, res: express.Response) => {
+  try {
+    const { ids } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ success: false, error: 'Array of volunteer IDs is required' });
+    }
+
+    const upperIds = ids.map((id) => String(id).toUpperCase());
+    const list = await loadVolunteers();
+    const removedVolunteers = list.filter((v) => upperIds.includes(v.id.toUpperCase()));
+    const remainingVolunteers = list.filter((v) => !upperIds.includes(v.id.toUpperCase()));
+
+    if (removedVolunteers.length === 0) {
+      return res.status(404).json({ success: false, error: 'No matching volunteers found to delete' });
+    }
+
+    const saved = await saveVolunteers(remainingVolunteers);
+    if (!saved) {
+      return res.status(500).json({ success: false, error: 'Could not update storage after bulk deletion' });
+    }
+
+    // Clean up storage files asynchronously for all removed volunteers
+    for (const vol of removedVolunteers) {
+      deleteVolunteerFilesFromStorage(vol.id, vol.imageUrl, vol.cardImageUrl).catch((err) => {
+        console.warn(`[Storage Cleanup] Notice deleting files for ${vol.id}:`, err);
+      });
+    }
+
+    console.log(`[Bulk Permanently Deleted] ${removedVolunteers.length} volunteer records`);
+
+    return res.json({
+      success: true,
+      deletedCount: removedVolunteers.length,
+      message: `Successfully deleted ${removedVolunteers.length} volunteer records permanently from storage.`,
+    });
+  } catch (err: any) {
+    console.error('Error in bulkDeleteVolunteersHandler:', err);
+    return res.status(500).json({ success: false, error: 'Server error during bulk delete' });
+  }
+};
+
+apiRouter.post('/volunteers/bulk-delete', bulkDeleteVolunteersHandler);
+apiRouter.post('/volunteer/bulk-delete', bulkDeleteVolunteersHandler);
 
 // Storage Diagnostics & Migration Status Endpoint
 apiRouter.get('/admin/storage-status', async (_req, res) => {
