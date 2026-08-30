@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { toPng } from 'html-to-image';
-import { Download, ShieldCheck, CheckCircle2, X } from 'lucide-react';
+import { Download, ShieldCheck, CheckCircle2, X, Pencil, Trash2 } from 'lucide-react';
 import { Volunteer } from '../types';
 import { AppLogo } from './AppLogo';
 
@@ -9,6 +9,8 @@ interface VolunteerCardProps {
   onRegisterAnother?: () => void;
   isAdminView?: boolean;
   onClose?: () => void;
+  onEdit?: (vol: Volunteer) => void;
+  onDelete?: (vol: Volunteer) => void;
 }
 
 export default function VolunteerCard({
@@ -16,6 +18,8 @@ export default function VolunteerCard({
   onRegisterAnother,
   isAdminView = false,
   onClose,
+  onEdit,
+  onDelete,
 }: VolunteerCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -195,7 +199,7 @@ export default function VolunteerCard({
         </div>
       </div>
 
-      {/* Action Buttons: Only Download PNG and Close */}
+      {/* Action Buttons */}
       <div className="w-full flex flex-col gap-2 pt-1 no-print">
         <div className="grid grid-cols-2 gap-2.5 w-full">
           <button
@@ -219,6 +223,33 @@ export default function VolunteerCard({
             <span>Close</span>
           </button>
         </div>
+
+        {isAdminView && (onEdit || onDelete) && (
+          <div className="grid grid-cols-2 gap-2.5 w-full pt-1 border-t border-slate-100">
+            {onEdit && (
+              <button
+                type="button"
+                id="admin-card-edit-btn"
+                onClick={() => onEdit(volunteer)}
+                className="py-2.5 px-3 rounded-xl bg-blue-50 hover:bg-blue-100 text-[#1E40AF] font-bold text-xs border border-blue-200 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                <span>Edit Details</span>
+              </button>
+            )}
+            {onDelete && (
+              <button
+                type="button"
+                id="admin-card-delete-btn"
+                onClick={() => onDelete(volunteer)}
+                className="py-2.5 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs border border-rose-200 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Permanently</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {downloadSuccess && (
