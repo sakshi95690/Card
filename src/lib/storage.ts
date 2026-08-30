@@ -325,9 +325,13 @@ export async function updateVolunteerRecord(
     cardStatus?: CardStatus;
   }
 ): Promise<Volunteer> {
-  let response: Response;
+  const cleanId = String(id || '').trim();
+  let response: Response | null = null;
+  let data: any = null;
+
+  // 1. Try standard PUT /api/volunteers/:id
   try {
-    response = await fetch(`/api/volunteers/${encodeURIComponent(id)}`, {
+    response = await fetch(`/api/volunteers/${encodeURIComponent(cleanId)}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -336,23 +340,42 @@ export async function updateVolunteerRecord(
       body: JSON.stringify(updatedData),
     });
   } catch (err) {
-    console.error('Network error during volunteer update PUT /api/volunteers/:id:', err);
-    throw new Error('Server connection error. Please check your network and try again.');
+    console.warn('PUT /api/volunteers/:id failed, trying POST edit fallback:', err);
   }
 
-  let data: any = null;
-  try {
-    data = await response.json();
-  } catch {
-    // ignore
+  // 2. Try POST /api/volunteers/:id/edit as fallback if PUT failed or received 404/405
+  if (!response || !response.ok) {
+    try {
+      const fallbackRes = await fetch(`/api/volunteers/${encodeURIComponent(cleanId)}/edit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify(updatedData),
+      });
+      if (fallbackRes.ok || !response) {
+        response = fallbackRes;
+      }
+    } catch (fallbackErr) {
+      console.warn('Fallback POST /api/volunteers/:id/edit also failed:', fallbackErr);
+    }
   }
 
-  if (response.ok && data?.success && data?.volunteer) {
+  if (response) {
+    try {
+      data = await response.json();
+    } catch {
+      // ignore JSON parse error
+    }
+  }
+
+  if (response && response.ok && data?.success && data?.volunteer) {
     try {
       broadcastChannel?.postMessage({
         type: 'VOLUNTEER_UPDATED',
         volunteer: data.volunteer,
-        id,
+        id: cleanId,
       });
     } catch {
       // ignore
@@ -360,7 +383,10 @@ export async function updateVolunteerRecord(
     return data.volunteer;
   }
 
-  const errorMessage = extractErrorMessage(data, `Failed to update volunteer record (Status ${response.status})`);
+  const errorMessage = extractErrorMessage(
+    data,
+    response ? `Failed to update volunteer record (Status ${response.status})` : 'Server connection error. Please check your network and try again.'
+  );
   throw new Error(errorMessage);
 }
 
@@ -375,16 +401,26 @@ export async function deleteVolunteerRecord(id: string): Promise<boolean> {
  * Permanently delete single volunteer card from database and storage
  */
 export async function deleteVolunteerPermanently(id: string): Promise<boolean> {
+  const cleanId = String(id || '').trim();
   try {
-    const res = await fetch(`/api/volunteers/${encodeURIComponent(id)}`, {
+    // 1. Try standard DELETE /api/volunteers/:id
+    let res = await fetch(`/api/volunteers/${encodeURIComponent(cleanId)}`, {
       method: 'DELETE',
     });
+
+    // 2. Fallback to POST /api/volunteers/:id/delete in environments where DELETE method is restricted
+    if (!res.ok) {
+      res = await fetch(`/api/volunteers/${encodeURIComponent(cleanId)}/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
 
     if (res.ok) {
       try {
         broadcastChannel?.postMessage({
           type: 'VOLUNTEER_DELETED',
-          id,
+          id: cleanId,
         });
       } catch {
         // ignore
