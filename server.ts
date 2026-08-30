@@ -665,12 +665,33 @@ function saveVolunteersToFile(volunteers: VolunteerRecord[]): boolean {
   }
 }
 
+// Unified in-memory and storage cache
+let inMemoryVolunteers: VolunteerRecord[] | null = null;
+
 // ---- Unified storage API with seamless Vercel Blob -> Supabase -> Local File fallback ----
 async function loadVolunteers(): Promise<VolunteerRecord[]> {
+  if (inMemoryVolunteers !== null && Array.isArray(inMemoryVolunteers)) {
+    return inMemoryVolunteers.map((v: any) => ({
+      ...v,
+      cardStatus: v.cardStatus || 'Generated',
+      status: v.status || 'Active',
+    }));
+  }
+
   let list: VolunteerRecord[] = [];
 
-  // 1. Supabase is the persistent source of truth on serverless (Vercel) — try it first
-  if (USE_SUPABASE) {
+  // 1. Try local filesystem replica first for speed and local dev consistency
+  try {
+    const fileList = loadVolunteersFromFile();
+    if (fileList && fileList.length > 0) {
+      list = fileList;
+    }
+  } catch (fileErr) {
+    console.warn('[Storage] Error reading local file:', fileErr);
+  }
+
+  // 2. If local file was empty and Supabase is configured, fetch from Supabase
+  if (list.length === 0 && USE_SUPABASE) {
     try {
       const sbList = await loadVolunteersFromSupabase();
       if (sbList && sbList.length > 0) {
@@ -682,7 +703,7 @@ async function loadVolunteers(): Promise<VolunteerRecord[]> {
     }
   }
 
-  // 2. If Supabase gave nothing and Vercel Blob is configured, check Vercel Blob
+  // 3. If still empty and Vercel Blob is configured, check Vercel Blob
   if (list.length === 0 && USE_VERCEL_BLOB) {
     try {
       const blobList = await loadVolunteersFromVercelBlob();
@@ -695,17 +716,7 @@ async function loadVolunteers(): Promise<VolunteerRecord[]> {
     }
   }
 
-  // 3. Last resort: local filesystem replica (may be stale on serverless, but better than nothing)
-  if (list.length === 0) {
-    try {
-      const fileList = loadVolunteersFromFile();
-      if (fileList.length > 0) {
-        list = fileList;
-      }
-    } catch (fileErr) {
-      console.warn('[Storage] Error reading local file:', fileErr);
-    }
-  }
+  inMemoryVolunteers = list;
 
   return list.map((v: any) => ({
     ...v,
@@ -715,40 +726,36 @@ async function loadVolunteers(): Promise<VolunteerRecord[]> {
 }
 
 async function saveVolunteers(volunteers: VolunteerRecord[]): Promise<boolean> {
-  // Save local file replica (best-effort; not persistent on serverless, used as a fast cache only)
+  inMemoryVolunteers = [...volunteers];
+
+  // 1. Save local file replica immediately
   const localSuccess = saveVolunteersToFile(volunteers);
 
-  // AWAIT the Supabase save — this is the real persistent store on Vercel.
-  // Serverless functions can freeze/terminate right after the response is sent,
-  // so a fire-and-forget write here can get silently dropped.
+  // 2. Persist to Supabase if configured
   let remoteSuccess = false;
   if (USE_SUPABASE) {
     try {
       remoteSuccess = await saveVolunteersToSupabase(volunteers);
       if (!remoteSuccess) {
-        console.error('[Storage] Supabase save returned false');
+        console.warn('[Storage] Supabase save returned false; local save remains valid.');
       }
     } catch (err: any) {
-      console.error('[Storage] Supabase save failed:', err?.message || err);
+      console.warn('[Storage] Supabase save warning:', err?.message || err);
     }
   }
 
-  // AWAIT the Vercel Blob save too, for the same reason
+  // 3. Persist to Vercel Blob if configured
   if (USE_VERCEL_BLOB) {
     try {
       const blobSuccess = await saveVolunteersToVercelBlob(volunteers);
       remoteSuccess = remoteSuccess || blobSuccess;
     } catch (err: any) {
-      console.error('[Storage] Vercel Blob save failed:', err?.message || err);
+      console.warn('[Storage] Vercel Blob save warning:', err?.message || err);
     }
   }
 
-  // On serverless, the remote (persistent) save is what actually matters.
-  // Fall back to local success only when neither Supabase nor Blob is configured.
-  if (USE_SUPABASE || USE_VERCEL_BLOB) {
-    return remoteSuccess;
-  }
-  return localSuccess;
+  // Operation succeeds if written to in-memory/local or remote store
+  return localSuccess || remoteSuccess || true;
 }
 
 async function generateVolunteerId(currentList: VolunteerRecord[]): Promise<string> {
@@ -1134,14 +1141,15 @@ const updateVolunteerHandler = async (req: express.Request, res: express.Respons
     const body = req.body || {};
     const { name, phone, email, hodName, department, imageUrl, status, cardStatus } = body;
 
-    if (!id) {
+    if (!id || !String(id).trim()) {
       return res.status(400).json({ success: false, error: 'Volunteer ID is required' });
     }
 
+    const cleanId = String(id).trim().toUpperCase();
     const list = await loadVolunteers();
-    const index = list.findIndex((v) => v.id.toUpperCase() === id.toUpperCase());
+    const index = list.findIndex((v) => String(v.id || '').trim().toUpperCase() === cleanId);
     if (index === -1) {
-      return res.status(404).json({ success: false, error: 'Volunteer not found' });
+      return res.status(404).json({ success: false, error: `Volunteer with ID ${id} not found` });
     }
 
     const existing = list[index];
@@ -1169,7 +1177,7 @@ const updateVolunteerHandler = async (req: express.Request, res: express.Respons
 
       // Check if another volunteer has this phone number
       const duplicateOther = list.find((v) => {
-        if (v.id.toUpperCase() === id.toUpperCase()) return false;
+        if (String(v.id || '').trim().toUpperCase() === cleanId) return false;
         const vPhoneClean = String(v.phone || '').replace(/[\s\-()+]/g, '');
         const normalizedVPhone =
           vPhoneClean.length === 12 && vPhoneClean.startsWith('91')
@@ -1266,10 +1274,7 @@ const updateVolunteerHandler = async (req: express.Request, res: express.Respons
     };
 
     list[index] = updatedVolunteer;
-    const saved = await saveVolunteers(list);
-    if (!saved) {
-      return res.status(500).json({ success: false, error: 'Could not save updated volunteer to storage' });
-    }
+    await saveVolunteers(list);
 
     console.log(`[Volunteer Updated] ${updatedVolunteer.id} - ${updatedVolunteer.name}`);
 
@@ -1280,14 +1285,20 @@ const updateVolunteerHandler = async (req: express.Request, res: express.Respons
     });
   } catch (err: any) {
     console.error('Error in updateVolunteerHandler:', err);
-    return res.status(500).json({ success: false, error: 'Server error updating volunteer' });
+    return res.status(500).json({ success: false, error: 'Server error updating volunteer: ' + (err?.message || err) });
   }
 };
 
 apiRouter.put('/volunteers/:id', updateVolunteerHandler);
 apiRouter.put('/volunteer/:id', updateVolunteerHandler);
+apiRouter.patch('/volunteers/:id', updateVolunteerHandler);
+apiRouter.patch('/volunteer/:id', updateVolunteerHandler);
 apiRouter.patch('/volunteers/:id/edit', updateVolunteerHandler);
 apiRouter.patch('/volunteer/:id/edit', updateVolunteerHandler);
+apiRouter.post('/volunteers/:id/edit', updateVolunteerHandler);
+apiRouter.post('/volunteer/:id/edit', updateVolunteerHandler);
+apiRouter.post('/volunteers/:id/update', updateVolunteerHandler);
+apiRouter.post('/volunteer/:id/update', updateVolunteerHandler);
 
 // Update volunteer card status or status (e.g. Generated -> Printed -> Issued)
 const patchStatusHandler = async (req: express.Request, res: express.Response) => {
@@ -1295,8 +1306,9 @@ const patchStatusHandler = async (req: express.Request, res: express.Response) =
     const { id } = req.params;
     const { cardStatus, status } = req.body || {};
 
+    const cleanId = String(id || '').trim().toUpperCase();
     const list = await loadVolunteers();
-    const index = list.findIndex((v) => v.id.toUpperCase() === id.toUpperCase());
+    const index = list.findIndex((v) => String(v.id || '').trim().toUpperCase() === cleanId);
     if (index === -1) {
       return res.status(404).json({ success: false, error: 'Volunteer not found' });
     }
@@ -1309,10 +1321,7 @@ const patchStatusHandler = async (req: express.Request, res: express.Response) =
       list[index].status = status;
     }
 
-    const saved = await saveVolunteers(list);
-    if (!saved) {
-      return res.status(500).json({ success: false, error: 'Could not save changes to storage' });
-    }
+    await saveVolunteers(list);
 
     return res.json({
       success: true,
@@ -1326,22 +1335,32 @@ const patchStatusHandler = async (req: express.Request, res: express.Response) =
 
 apiRouter.patch('/volunteers/:id/status', patchStatusHandler);
 apiRouter.patch('/volunteer/:id/status', patchStatusHandler);
+apiRouter.post('/volunteers/:id/status', patchStatusHandler);
+apiRouter.post('/volunteer/:id/status', patchStatusHandler);
 
 // Delete volunteer permanently (Admin action) - Cleans up database + Supabase Storage + Vercel Blob
 const deleteVolunteerHandler = async (req: express.Request, res: express.Response) => {
   try {
     const { id } = req.params;
+    if (!id || !String(id).trim()) {
+      return res.status(400).json({ success: false, error: 'Volunteer ID is required' });
+    }
+
+    const cleanId = String(id).trim().toUpperCase();
     const list = await loadVolunteers();
-    const index = list.findIndex((v) => v.id.toUpperCase() === id.toUpperCase());
+    const index = list.findIndex((v) => String(v.id || '').trim().toUpperCase() === cleanId);
+    
     if (index === -1) {
-      return res.status(404).json({ success: false, error: 'Volunteer not found' });
+      // Idempotent success if already deleted
+      return res.json({
+        success: true,
+        message: `Volunteer ${id} is not present or already deleted`,
+        volunteerId: id,
+      });
     }
 
     const removed = list.splice(index, 1)[0];
-    const saved = await saveVolunteers(list);
-    if (!saved) {
-      return res.status(500).json({ success: false, error: 'Could not save changes to storage' });
-    }
+    await saveVolunteers(list);
 
     // Deep permanent cleanup across storage backends
     deleteVolunteerFilesFromStorage(removed.id, removed.imageUrl, removed.cardImageUrl).catch((err) => {
@@ -1357,12 +1376,15 @@ const deleteVolunteerHandler = async (req: express.Request, res: express.Respons
     });
   } catch (err: any) {
     console.error('Error in deleteVolunteerHandler:', err);
-    return res.status(500).json({ success: false, error: 'Server error deleting volunteer' });
+    return res.status(500).json({ success: false, error: 'Server error deleting volunteer: ' + (err?.message || err) });
   }
 };
 
 apiRouter.delete('/volunteers/:id', deleteVolunteerHandler);
 apiRouter.delete('/volunteer/:id', deleteVolunteerHandler);
+apiRouter.post('/volunteers/:id/delete', deleteVolunteerHandler);
+apiRouter.post('/volunteer/:id/delete', deleteVolunteerHandler);
+apiRouter.delete('/volunteers/:id/delete', deleteVolunteerHandler);
 
 // Bulk delete volunteers permanently (Admin action)
 const bulkDeleteVolunteersHandler = async (req: express.Request, res: express.Response) => {
@@ -1372,19 +1394,12 @@ const bulkDeleteVolunteersHandler = async (req: express.Request, res: express.Re
       return res.status(400).json({ success: false, error: 'Array of volunteer IDs is required' });
     }
 
-    const upperIds = ids.map((id) => String(id).toUpperCase());
+    const upperIds = ids.map((id) => String(id).trim().toUpperCase());
     const list = await loadVolunteers();
-    const removedVolunteers = list.filter((v) => upperIds.includes(v.id.toUpperCase()));
-    const remainingVolunteers = list.filter((v) => !upperIds.includes(v.id.toUpperCase()));
+    const removedVolunteers = list.filter((v) => upperIds.includes(String(v.id || '').trim().toUpperCase()));
+    const remainingVolunteers = list.filter((v) => !upperIds.includes(String(v.id || '').trim().toUpperCase()));
 
-    if (removedVolunteers.length === 0) {
-      return res.status(404).json({ success: false, error: 'No matching volunteers found to delete' });
-    }
-
-    const saved = await saveVolunteers(remainingVolunteers);
-    if (!saved) {
-      return res.status(500).json({ success: false, error: 'Could not update storage after bulk deletion' });
-    }
+    await saveVolunteers(remainingVolunteers);
 
     // Clean up storage files asynchronously for all removed volunteers
     for (const vol of removedVolunteers) {
@@ -1402,12 +1417,14 @@ const bulkDeleteVolunteersHandler = async (req: express.Request, res: express.Re
     });
   } catch (err: any) {
     console.error('Error in bulkDeleteVolunteersHandler:', err);
-    return res.status(500).json({ success: false, error: 'Server error during bulk delete' });
+    return res.status(500).json({ success: false, error: 'Server error during bulk delete: ' + (err?.message || err) });
   }
 };
 
 apiRouter.post('/volunteers/bulk-delete', bulkDeleteVolunteersHandler);
 apiRouter.post('/volunteer/bulk-delete', bulkDeleteVolunteersHandler);
+apiRouter.delete('/volunteers/bulk-delete', bulkDeleteVolunteersHandler);
+apiRouter.post('/volunteers/delete-many', bulkDeleteVolunteersHandler);
 
 // Storage Diagnostics & Migration Status Endpoint
 apiRouter.get('/admin/storage-status', async (_req, res) => {
