@@ -310,9 +310,71 @@ export async function updateVolunteerCardStatus(
 }
 
 /**
- * Delete volunteer record from central database
+ * Update full volunteer details (Admin Action) in central database
+ */
+export async function updateVolunteerRecord(
+  id: string,
+  updatedData: {
+    name?: string;
+    phone?: string;
+    email?: string;
+    hodName?: string;
+    department?: string;
+    imageUrl?: string;
+    status?: 'Active' | 'Deactivated' | 'Verified' | 'Pending';
+    cardStatus?: CardStatus;
+  }
+): Promise<Volunteer> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/volunteers/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify(updatedData),
+    });
+  } catch (err) {
+    console.error('Network error during volunteer update PUT /api/volunteers/:id:', err);
+    throw new Error('Server connection error. Please check your network and try again.');
+  }
+
+  let data: any = null;
+  try {
+    data = await response.json();
+  } catch {
+    // ignore
+  }
+
+  if (response.ok && data?.success && data?.volunteer) {
+    try {
+      broadcastChannel?.postMessage({
+        type: 'VOLUNTEER_UPDATED',
+        volunteer: data.volunteer,
+        id,
+      });
+    } catch {
+      // ignore
+    }
+    return data.volunteer;
+  }
+
+  const errorMessage = extractErrorMessage(data, `Failed to update volunteer record (Status ${response.status})`);
+  throw new Error(errorMessage);
+}
+
+/**
+ * Delete volunteer record permanently from central database and storage
  */
 export async function deleteVolunteerRecord(id: string): Promise<boolean> {
+  return deleteVolunteerPermanently(id);
+}
+
+/**
+ * Permanently delete single volunteer card from database and storage
+ */
+export async function deleteVolunteerPermanently(id: string): Promise<boolean> {
   try {
     const res = await fetch(`/api/volunteers/${encodeURIComponent(id)}`, {
       method: 'DELETE',
@@ -333,6 +395,38 @@ export async function deleteVolunteerRecord(id: string): Promise<boolean> {
     console.error('Failed to delete volunteer record from backend:', err);
   }
   return false;
+}
+
+/**
+ * Permanently delete multiple volunteer cards from database and storage in bulk
+ */
+export async function bulkDeleteVolunteersPermanently(
+  ids: string[]
+): Promise<{ success: boolean; deletedCount: number; message?: string }> {
+  try {
+    const res = await fetch('/api/volunteers/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+
+    const data = await res.json();
+    if (res.ok && data?.success) {
+      try {
+        broadcastChannel?.postMessage({
+          type: 'BULK_VOLUNTEERS_DELETED',
+          ids,
+        });
+      } catch {
+        // ignore
+      }
+      return { success: true, deletedCount: data.deletedCount || ids.length, message: data.message };
+    }
+    return { success: false, deletedCount: 0, message: data?.error || 'Failed to delete records' };
+  } catch (err: any) {
+    console.error('Failed to bulk delete volunteer records from backend:', err);
+    return { success: false, deletedCount: 0, message: err?.message || 'Server error during bulk delete' };
+  }
 }
 
 /**
