@@ -1394,19 +1394,23 @@ const bulkDeleteVolunteersHandler = async (req: express.Request, res: express.Re
       return res.status(400).json({ success: false, error: 'Array of volunteer IDs is required' });
     }
 
-    const upperIds = ids.map((id) => String(id).trim().toUpperCase());
+    const upperIds = new Set(ids.map((id) => String(id).trim().toUpperCase()));
     const list = await loadVolunteers();
-    const removedVolunteers = list.filter((v) => upperIds.includes(String(v.id || '').trim().toUpperCase()));
-    const remainingVolunteers = list.filter((v) => !upperIds.includes(String(v.id || '').trim().toUpperCase()));
+    const removedVolunteers = list.filter((v) => upperIds.has(String(v.id || '').trim().toUpperCase()));
+    const remainingVolunteers = list.filter((v) => !upperIds.has(String(v.id || '').trim().toUpperCase()));
 
     await saveVolunteers(remainingVolunteers);
 
-    // Clean up storage files asynchronously for all removed volunteers
-    for (const vol of removedVolunteers) {
-      deleteVolunteerFilesFromStorage(vol.id, vol.imageUrl, vol.cardImageUrl).catch((err) => {
-        console.warn(`[Storage Cleanup] Notice deleting files for ${vol.id}:`, err);
-      });
-    }
+    // Clean up storage files asynchronously in small batches
+    (async () => {
+      for (const vol of removedVolunteers) {
+        try {
+          await deleteVolunteerFilesFromStorage(vol.id, vol.imageUrl, vol.cardImageUrl);
+        } catch (err) {
+          console.warn(`[Storage Cleanup] Notice deleting files for ${vol.id}:`, err);
+        }
+      }
+    })();
 
     console.log(`[Bulk Permanently Deleted] ${removedVolunteers.length} volunteer records`);
 
@@ -1425,6 +1429,99 @@ apiRouter.post('/volunteers/bulk-delete', bulkDeleteVolunteersHandler);
 apiRouter.post('/volunteer/bulk-delete', bulkDeleteVolunteersHandler);
 apiRouter.delete('/volunteers/bulk-delete', bulkDeleteVolunteersHandler);
 apiRouter.post('/volunteers/delete-many', bulkDeleteVolunteersHandler);
+
+// Server-side Direct CSV Export Endpoint
+const exportCSVHandler = async (req: express.Request, res: express.Response) => {
+  try {
+    const list = await loadVolunteers();
+    const { department, status } = req.query;
+    let filtered = list;
+
+    if (status && status !== 'All') {
+      if (status === 'Active') filtered = filtered.filter((v) => v.status !== 'Deactivated');
+      else if (status === 'Deactivated') filtered = filtered.filter((v) => v.status === 'Deactivated');
+    }
+    if (department && department !== 'All' && department !== 'ALL') {
+      filtered = filtered.filter((v) => v.department === department);
+    }
+
+    const escapeCSV = (val: any): string => {
+      if (val === undefined || val === null) return '""';
+      const str = String(val).trim();
+      return `"${str.replace(/"/g, '""')}"`;
+    };
+
+    const headers = [
+      'Volunteer ID',
+      'Full Name',
+      'Phone Number',
+      'Department',
+      'Department HOD Name',
+      'Status',
+      'Card Status',
+      'Photo URL',
+      'Card URL',
+      'Registration Date',
+    ];
+
+    const rows = filtered.map((vol) => {
+      const formattedDate = vol.createdAt
+        ? new Date(vol.createdAt).toLocaleString('en-IN', {
+            dateStyle: 'medium',
+            timeStyle: 'short',
+          })
+        : '';
+
+      return [
+        escapeCSV(vol.id),
+        escapeCSV(vol.name),
+        escapeCSV(vol.phone ? `+91 ${vol.phone}` : ''),
+        escapeCSV(vol.department || 'General Seva'),
+        escapeCSV(vol.hodName || ''),
+        escapeCSV(vol.status || 'Active'),
+        escapeCSV(vol.cardStatus || 'Generated'),
+        escapeCSV(vol.imageUrl || ''),
+        escapeCSV(vol.cardImageUrl || ''),
+        escapeCSV(formattedDate),
+      ].join(',');
+    });
+
+    const csvContent = '\uFEFF' + [headers.map(escapeCSV).join(','), ...rows].join('\r\n');
+    const dateStamp = new Date().toISOString().split('T')[0];
+    const filename = `ISKCON_Janmashtami_2026_Volunteers_All_${filtered.length}_${dateStamp}.csv`;
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(csvContent);
+  } catch (err: any) {
+    console.error('Error in exportCSVHandler:', err);
+    return res.status(500).json({ success: false, error: 'Server error exporting CSV' });
+  }
+};
+
+apiRouter.get('/volunteers/export/csv', exportCSVHandler);
+apiRouter.get('/volunteers/export-csv', exportCSVHandler);
+apiRouter.get('/export/csv', exportCSVHandler);
+
+// Server-side Direct JSON Database Export Endpoint
+const exportJSONHandler = async (_req: express.Request, res: express.Response) => {
+  try {
+    const list = await loadVolunteers();
+    const dateStamp = new Date().toISOString().split('T')[0];
+    const filename = `ISKCON_Janmashtami_2026_Database_Backup_${list.length}_${dateStamp}.json`;
+
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(JSON.stringify(list, null, 2));
+  } catch (err: any) {
+    console.error('Error in exportJSONHandler:', err);
+    return res.status(500).json({ success: false, error: 'Server error exporting JSON' });
+  }
+};
+
+apiRouter.get('/volunteers/export/json', exportJSONHandler);
+apiRouter.get('/volunteers/export-json', exportJSONHandler);
+apiRouter.get('/export/json', exportJSONHandler);
 
 // Storage Diagnostics & Migration Status Endpoint
 apiRouter.get('/admin/storage-status', async (_req, res) => {
