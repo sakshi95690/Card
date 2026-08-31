@@ -812,7 +812,7 @@ apiRouter.get('/health', async (_req, res) => {
 apiRouter.post('/admin/verify-pin', (req, res) => {
   try {
     const { pin } = req.body || {};
-    const configuredPin = String(process.env.ADMIN_PIN || '2580').trim();
+    const configuredPin = String(process.env.ADMIN_PIN || '1997').trim();
 
     if (!pin || typeof pin !== 'string') {
       return res.status(400).json({ success: false, error: 'PIN is required' });
@@ -1580,17 +1580,18 @@ apiRouter.get('/proxy/image', imageProxyHandler);
 async function generateServerCardImageBuffer(vol: VolunteerRecord): Promise<Buffer> {
   let processedPhotoBuffer: Buffer | null = null;
 
-  if (vol.imageUrl) {
+  const photoUrl = vol.imageUrl || (vol as any).photoUrl || '';
+  if (photoUrl) {
     try {
       let rawPhotoBuffer: Buffer | null = null;
-      if (vol.imageUrl.startsWith('data:')) {
-        const match = vol.imageUrl.match(/^data:([^;]+);base64,(.*)$/);
+      if (photoUrl.startsWith('data:')) {
+        const match = photoUrl.match(/^data:([^;]+);base64,(.*)$/);
         if (match) {
           rawPhotoBuffer = Buffer.from(match[2], 'base64');
         }
-      } else if (vol.imageUrl.startsWith('http://') || vol.imageUrl.startsWith('https://')) {
-        const resp = await fetch(vol.imageUrl, {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
+      } else if (photoUrl.startsWith('http://') || photoUrl.startsWith('https://')) {
+        const resp = await fetch(photoUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
         });
         if (resp.ok) {
           const arr = await resp.arrayBuffer();
@@ -1624,7 +1625,24 @@ async function generateServerCardImageBuffer(vol: VolunteerRecord): Promise<Buff
       .replace(/'/g, '&apos;');
   };
 
+  const rawName = String(vol.name || (vol as any).full_name || 'Volunteer').trim();
+  const name = escapeXml(rawName);
+  const nameFontSize = rawName.length > 24 ? 24 : rawName.length > 18 ? 28 : 32;
+
+  const rawDept = String(vol.department || (vol as any).dept || 'General Seva').trim();
+  const dept = escapeXml(rawDept || 'General Seva');
+
+  const rawHod = String(vol.hodName || (vol as any).hod_name || (vol as any).hod || '—').trim();
+  const hod = escapeXml(rawHod || '—');
+
+  const rawPhone = String(vol.phone || (vol as any).phone_number || (vol as any).contact || 'N/A').trim();
+  const phone = escapeXml(rawPhone ? (rawPhone.startsWith('+91') ? rawPhone : `+91 ${rawPhone}`) : 'N/A');
+
+  const id = escapeXml(String(vol.id || 'VOL-2026').trim());
+
   const isDeactivated = vol.status === 'Deactivated';
+  const statusText = isDeactivated ? 'Deactivated' : escapeXml(vol.status || 'Active');
+  const statusColor = isDeactivated ? '#DC2626' : '#16A34A';
   const badgeColor = isDeactivated ? '#DC2626' : '#1E40AF';
   const badgeText = isDeactivated ? 'CARD DEACTIVATED' : 'VOLUNTEER';
 
@@ -1641,32 +1659,45 @@ async function generateServerCardImageBuffer(vol: VolunteerRecord): Promise<Buff
         <stop offset="50%" stop-color="#FDE047" />
         <stop offset="100%" stop-color="#F59E0B" />
       </linearGradient>
-      <filter id="cardShadow" x="-10%" y="-10%" width="120%" height="120%">
-        <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#0F172A" flood-opacity="0.15" />
-      </filter>
+      <linearGradient id="iskconLogoBg" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#D81B60" />
+        <stop offset="100%" stop-color="#6A1B9A" />
+      </linearGradient>
     </defs>
 
-    <!-- Outer Canvas Background -->
-    <rect width="680" height="1060" fill="#F8FAFC" />
+    <!-- Canvas Outer Background -->
+    <rect width="680" height="1060" fill="#F1F5F9" />
 
     <!-- Main Card Body Container -->
-    <rect x="25" y="25" width="630" height="1010" rx="36" fill="#FFFFFF" stroke="#DBEAFE" stroke-width="3" filter="url(#cardShadow)" />
+    <rect x="25" y="25" width="630" height="1010" rx="32" fill="#FFFFFF" stroke="#DBEAFE" stroke-width="3" />
 
     <!-- Top Header Banner -->
-    <path d="M 25 61 Q 25 25 61 25 L 619 25 Q 655 25 655 61 L 655 170 L 25 170 Z" fill="url(#headerGrad)" />
-    <rect x="25" y="167" width="630" height="4" fill="url(#goldRibbon)" />
+    <path d="M 25 57 Q 25 25 57 25 L 623 25 Q 655 25 655 57 L 655 175 L 25 175 Z" fill="url(#headerGrad)" />
+    <rect x="25" y="171" width="630" height="4" fill="url(#goldRibbon)" />
 
-    <!-- Header Text -->
-    <text x="340" y="72" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="800" fill="#93C5FD" text-anchor="middle" letter-spacing="3">ISKCON</text>
-    <text x="340" y="112" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="30" font-weight="900" fill="#FFFFFF" text-anchor="middle" letter-spacing="1.5">SRI KRISHNA JANMASTAMI</text>
-    <text x="340" y="145" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="700" fill="#FDE047" text-anchor="middle" letter-spacing="2">2026 FESTIVAL SEVA</text>
+    <!-- ISKCON Vector Tilak Logo (Top Left) -->
+    <circle cx="68" cy="85" r="28" fill="url(#iskconLogoBg)" stroke="#FFD54F" stroke-width="2" />
+    <path d="M 64 68 C 64 68 64 86 65 94 C 65 96 66 97 68 97 C 70 97 71 96 71 94 C 72 86 72 68 72 68" stroke="#FFE082" stroke-width="2.5" fill="none" stroke-linecap="round" />
+    <line x1="68" y1="71" x2="68" y2="88" stroke="#FFFFFF" stroke-width="1.2" stroke-linecap="round" />
+
+    <!-- Top Left Brand Text -->
+    <text x="108" y="78" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="14" font-weight="bold" fill="#93C5FD">ISKCON</text>
+    <text x="108" y="96" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="bold" fill="#DBEAFE">Janmashtami</text>
+
+    <!-- Top Right Badge -->
+    <rect x="495" y="65" width="135" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.18" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="1.5" />
+    <text x="562" y="84" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="bold" fill="#FFFFFF" text-anchor="middle">HARE KRISHNA</text>
+
+    <!-- Header Festival Title -->
+    <text x="340" y="128" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="26" font-weight="bold" fill="#FFFFFF" text-anchor="middle">SRI KRISHNA JANMASTAMI</text>
+    <text x="340" y="153" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="14" font-weight="bold" fill="#FDE047" text-anchor="middle">2026 FESTIVAL SEVA</text>
 
     <!-- Center Badge -->
-    <rect x="220" y="152" width="240" height="38" rx="19" fill="${badgeColor}" stroke="#FFFFFF" stroke-width="3" />
-    <text x="340" y="177" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="900" fill="#FFFFFF" text-anchor="middle" letter-spacing="2.5">${badgeText}</text>
+    <rect x="220" y="156" width="240" height="38" rx="19" fill="${badgeColor}" stroke="#FFFFFF" stroke-width="3" />
+    <text x="340" y="181" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="14" font-weight="bold" fill="#FFFFFF" text-anchor="middle">${badgeText}</text>
 
     <!-- Photo Container Frame -->
-    <rect x="210" y="215" width="260" height="260" rx="26" fill="#F1F5F9" stroke="#1E40AF" stroke-width="3" />
+    <rect x="210" y="215" width="260" height="260" rx="24" fill="#F8FAFC" stroke="#1E40AF" stroke-width="3" />
 
     ${
       !processedPhotoBuffer
@@ -1676,38 +1707,38 @@ async function generateServerCardImageBuffer(vol: VolunteerRecord): Promise<Buff
         : ''
     }
 
-    <!-- Volunteer Full Name -->
-    <text x="340" y="525" font-family="Georgia, serif" font-size="34" font-weight="800" fill="#0F172A" text-anchor="middle">${escapeXml(vol.name)}</text>
+    <!-- Volunteer Full Name (Dark, high-contrast, scalable) -->
+    <text x="340" y="525" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="${nameFontSize}" font-weight="bold" fill="#0F172A" text-anchor="middle">${name}</text>
 
     <!-- Department Pill Badge -->
-    <rect x="140" y="555" width="400" height="50" rx="14" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="2" />
-    <text x="340" y="588" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="22" font-weight="800" fill="#1E40AF" text-anchor="middle">${escapeXml(vol.department || 'General Seva')}</text>
+    <rect x="110" y="555" width="460" height="48" rx="14" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="2" />
+    <text x="340" y="587" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="20" font-weight="bold" fill="#1E40AF" text-anchor="middle">${dept}</text>
 
     <!-- Info Card Details Box -->
-    <rect x="60" y="625" width="560" height="260" rx="20" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="2" />
+    <rect x="55" y="625" width="570" height="260" rx="20" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="2" />
 
     <!-- Info Row 1: HOD -->
-    <text x="90" y="675" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="600" fill="#64748B">Department HOD</text>
-    <text x="590" y="675" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="800" fill="#0F172A" text-anchor="end">${escapeXml(vol.hodName || 'Seva Committee')}</text>
-    <line x1="90" y1="700" x2="590" y2="700" stroke="#E2E8F0" stroke-width="1.5" />
+    <text x="85" y="675" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="18" font-weight="bold" fill="#64748B">Department HOD</text>
+    <text x="595" y="675" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="20" font-weight="bold" fill="#0F172A" text-anchor="end">${hod}</text>
+    <line x1="85" y1="702" x2="595" y2="702" stroke="#E2E8F0" stroke-width="1.5" />
 
     <!-- Info Row 2: Phone -->
-    <text x="90" y="745" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="600" fill="#64748B">Contact Phone</text>
-    <text x="590" y="745" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="800" fill="#0F172A" text-anchor="end">+91 ${escapeXml(vol.phone || 'N/A')}</text>
-    <line x1="90" y1="770" x2="590" y2="770" stroke="#E2E8F0" stroke-width="1.5" />
+    <text x="85" y="745" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="18" font-weight="bold" fill="#64748B">Contact Phone</text>
+    <text x="595" y="745" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="20" font-weight="bold" fill="#0F172A" text-anchor="end">${phone}</text>
+    <line x1="85" y1="772" x2="595" y2="772" stroke="#E2E8F0" stroke-width="1.5" />
 
     <!-- Info Row 3: Card ID -->
-    <text x="90" y="815" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="600" fill="#64748B">Volunteer ID</text>
-    <text x="590" y="815" font-family="Courier, monospace" font-size="20" font-weight="800" fill="#1E40AF" text-anchor="end">${escapeXml(vol.id)}</text>
-    <line x1="90" y1="840" x2="590" y2="840" stroke="#E2E8F0" stroke-width="1.5" />
+    <text x="85" y="815" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="18" font-weight="bold" fill="#64748B">Volunteer ID</text>
+    <text x="595" y="815" font-family="Liberation Mono, Courier, monospace" font-size="20" font-weight="bold" fill="#1E40AF" text-anchor="end">${id}</text>
+    <line x1="85" y1="842" x2="595" y2="842" stroke="#E2E8F0" stroke-width="1.5" />
 
     <!-- Info Row 4: Status -->
-    <text x="90" y="865" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="15" font-weight="600" fill="#64748B">Status: <tspan font-weight="800" fill="${isDeactivated ? '#DC2626' : '#16A34A'}">${escapeXml(vol.status || 'Active')}</tspan></text>
-    <text x="590" y="865" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="15" font-weight="700" fill="#64748B" text-anchor="end">HARE RAMA HARE KRISHNA</text>
+    <text x="85" y="868" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="16" font-weight="bold" fill="#64748B">Status: <tspan font-weight="bold" fill="${statusColor}">${statusText}</tspan></text>
+    <text x="595" y="868" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="14" font-weight="bold" fill="#64748B" text-anchor="end">HARE RAMA HARE KRISHNA</text>
 
     <!-- Footer -->
-    <text x="340" y="930" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="700" fill="#475569" text-anchor="middle">Janmashtami 2026 Seva Committee</text>
-    <text x="340" y="955" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="600" fill="#94A3B8" text-anchor="middle" letter-spacing="1.5">VALID DURING FESTIVAL DAYS • NON-TRANSFERABLE</text>
+    <text x="340" y="930" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="16" font-weight="bold" fill="#475569" text-anchor="middle">Janmashtami 2026 Seva Committee</text>
+    <text x="340" y="955" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="12" font-weight="bold" fill="#94A3B8" text-anchor="middle">VALID DURING FESTIVAL DAYS • NON-TRANSFERABLE</text>
   </svg>
   `;
 
