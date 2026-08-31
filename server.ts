@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import sharp from 'sharp';
+import JSZip from 'jszip';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { list as listVercelBlobs, put as putVercelBlob, del as delVercelBlob } from '@vercel/blob';
 
@@ -1522,6 +1523,315 @@ const exportJSONHandler = async (_req: express.Request, res: express.Response) =
 apiRouter.get('/volunteers/export/json', exportJSONHandler);
 apiRouter.get('/volunteers/export-json', exportJSONHandler);
 apiRouter.get('/export/json', exportJSONHandler);
+
+// ----------------------------------------------------
+// Image Proxy Endpoint (Bypasses browser CORS & tainted canvas issues for exports)
+// ----------------------------------------------------
+const imageProxyHandler = async (req: express.Request, res: express.Response) => {
+  const url = String(req.query.url || '').trim();
+  if (!url) {
+    return res.status(400).send('Query parameter "url" is required');
+  }
+
+  try {
+    if (url.startsWith('data:')) {
+      const match = url.match(/^data:([^;]+);base64,(.*)$/);
+      if (match) {
+        const mime = match[1];
+        const buffer = Buffer.from(match[2], 'base64');
+        res.setHeader('Content-Type', mime);
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.send(buffer);
+      }
+    }
+
+    const fetchRes = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ISKCON Volunteer Service',
+        Accept: 'image/*,*/*',
+      },
+    });
+
+    if (!fetchRes.ok) {
+      return res.status(fetchRes.status).send(`Failed to fetch image: ${fetchRes.statusText}`);
+    }
+
+    const contentType = fetchRes.headers.get('content-type') || 'image/jpeg';
+    const arrayBuffer = await fetchRes.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.send(buffer);
+  } catch (err: any) {
+    console.warn('[Image Proxy Error]:', err?.message || err);
+    return res.status(500).send('Error proxying image: ' + (err?.message || err));
+  }
+};
+
+apiRouter.get('/image-proxy', imageProxyHandler);
+apiRouter.get('/proxy/image', imageProxyHandler);
+
+// ----------------------------------------------------
+// Server-Side High-Res Card Image Generator Helper
+// ----------------------------------------------------
+async function generateServerCardImageBuffer(vol: VolunteerRecord): Promise<Buffer> {
+  let processedPhotoBuffer: Buffer | null = null;
+
+  if (vol.imageUrl) {
+    try {
+      let rawPhotoBuffer: Buffer | null = null;
+      if (vol.imageUrl.startsWith('data:')) {
+        const match = vol.imageUrl.match(/^data:([^;]+);base64,(.*)$/);
+        if (match) {
+          rawPhotoBuffer = Buffer.from(match[2], 'base64');
+        }
+      } else if (vol.imageUrl.startsWith('http://') || vol.imageUrl.startsWith('https://')) {
+        const resp = await fetch(vol.imageUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+        });
+        if (resp.ok) {
+          const arr = await resp.arrayBuffer();
+          rawPhotoBuffer = Buffer.from(arr);
+        }
+      }
+
+      if (rawPhotoBuffer) {
+        // Create 240x240 rounded photo
+        const roundedCornerSvg = Buffer.from(
+          '<svg><rect x="0" y="0" width="240" height="240" rx="20" ry="20"/></svg>'
+        );
+        processedPhotoBuffer = await sharp(rawPhotoBuffer)
+          .rotate()
+          .resize(240, 240, { fit: 'cover', position: 'center' })
+          .composite([{ input: roundedCornerSvg, blend: 'dest-in' }])
+          .png()
+          .toBuffer();
+      }
+    } catch (err) {
+      console.warn(`[Card Gen Notice] Could not process photo for ${vol.id}:`, err);
+    }
+  }
+
+  const escapeXml = (unsafe: string) => {
+    return (unsafe || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+  };
+
+  const isDeactivated = vol.status === 'Deactivated';
+  const badgeColor = isDeactivated ? '#DC2626' : '#1E40AF';
+  const badgeText = isDeactivated ? 'CARD DEACTIVATED' : 'VOLUNTEER';
+
+  const svgCard = `
+  <svg width="680" height="1060" viewBox="0 0 680 1060" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="headerGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#0F294A" />
+        <stop offset="50%" stop-color="#1E40AF" />
+        <stop offset="100%" stop-color="#2563EB" />
+      </linearGradient>
+      <linearGradient id="goldRibbon" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#93C5FD" />
+        <stop offset="50%" stop-color="#FDE047" />
+        <stop offset="100%" stop-color="#F59E0B" />
+      </linearGradient>
+      <filter id="cardShadow" x="-10%" y="-10%" width="120%" height="120%">
+        <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#0F172A" flood-opacity="0.15" />
+      </filter>
+    </defs>
+
+    <!-- Outer Canvas Background -->
+    <rect width="680" height="1060" fill="#F8FAFC" />
+
+    <!-- Main Card Body Container -->
+    <rect x="25" y="25" width="630" height="1010" rx="36" fill="#FFFFFF" stroke="#DBEAFE" stroke-width="3" filter="url(#cardShadow)" />
+
+    <!-- Top Header Banner -->
+    <path d="M 25 61 Q 25 25 61 25 L 619 25 Q 655 25 655 61 L 655 170 L 25 170 Z" fill="url(#headerGrad)" />
+    <rect x="25" y="167" width="630" height="4" fill="url(#goldRibbon)" />
+
+    <!-- Header Text -->
+    <text x="340" y="72" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="800" fill="#93C5FD" text-anchor="middle" letter-spacing="3">ISKCON</text>
+    <text x="340" y="112" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="30" font-weight="900" fill="#FFFFFF" text-anchor="middle" letter-spacing="1.5">SRI KRISHNA JANMASTAMI</text>
+    <text x="340" y="145" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="700" fill="#FDE047" text-anchor="middle" letter-spacing="2">2026 FESTIVAL SEVA</text>
+
+    <!-- Center Badge -->
+    <rect x="220" y="152" width="240" height="38" rx="19" fill="${badgeColor}" stroke="#FFFFFF" stroke-width="3" />
+    <text x="340" y="177" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14" font-weight="900" fill="#FFFFFF" text-anchor="middle" letter-spacing="2.5">${badgeText}</text>
+
+    <!-- Photo Container Frame -->
+    <rect x="210" y="215" width="260" height="260" rx="26" fill="#F1F5F9" stroke="#1E40AF" stroke-width="3" />
+
+    ${
+      !processedPhotoBuffer
+        ? `<!-- Placeholder Avatar -->
+           <circle cx="340" cy="320" r="48" fill="#CBD5E1" />
+           <path d="M 280 430 Q 340 370 400 430 Z" fill="#CBD5E1" />`
+        : ''
+    }
+
+    <!-- Volunteer Full Name -->
+    <text x="340" y="525" font-family="Georgia, serif" font-size="34" font-weight="800" fill="#0F172A" text-anchor="middle">${escapeXml(vol.name)}</text>
+
+    <!-- Department Pill Badge -->
+    <rect x="140" y="555" width="400" height="50" rx="14" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="2" />
+    <text x="340" y="588" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="22" font-weight="800" fill="#1E40AF" text-anchor="middle">${escapeXml(vol.department || 'General Seva')}</text>
+
+    <!-- Info Card Details Box -->
+    <rect x="60" y="625" width="560" height="260" rx="20" fill="#F8FAFC" stroke="#E2E8F0" stroke-width="2" />
+
+    <!-- Info Row 1: HOD -->
+    <text x="90" y="675" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="600" fill="#64748B">Department HOD</text>
+    <text x="590" y="675" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="800" fill="#0F172A" text-anchor="end">${escapeXml(vol.hodName || 'Seva Committee')}</text>
+    <line x1="90" y1="700" x2="590" y2="700" stroke="#E2E8F0" stroke-width="1.5" />
+
+    <!-- Info Row 2: Phone -->
+    <text x="90" y="745" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="600" fill="#64748B">Contact Phone</text>
+    <text x="590" y="745" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="800" fill="#0F172A" text-anchor="end">+91 ${escapeXml(vol.phone || 'N/A')}</text>
+    <line x1="90" y1="770" x2="590" y2="770" stroke="#E2E8F0" stroke-width="1.5" />
+
+    <!-- Info Row 3: Card ID -->
+    <text x="90" y="815" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18" font-weight="600" fill="#64748B">Volunteer ID</text>
+    <text x="590" y="815" font-family="Courier, monospace" font-size="20" font-weight="800" fill="#1E40AF" text-anchor="end">${escapeXml(vol.id)}</text>
+    <line x1="90" y1="840" x2="590" y2="840" stroke="#E2E8F0" stroke-width="1.5" />
+
+    <!-- Info Row 4: Status -->
+    <text x="90" y="865" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="15" font-weight="600" fill="#64748B">Status: <tspan font-weight="800" fill="${isDeactivated ? '#DC2626' : '#16A34A'}">${escapeXml(vol.status || 'Active')}</tspan></text>
+    <text x="590" y="865" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="15" font-weight="700" fill="#64748B" text-anchor="end">HARE RAMA HARE KRISHNA</text>
+
+    <!-- Footer -->
+    <text x="340" y="930" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="700" fill="#475569" text-anchor="middle">Janmashtami 2026 Seva Committee</text>
+    <text x="340" y="955" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" font-weight="600" fill="#94A3B8" text-anchor="middle" letter-spacing="1.5">VALID DURING FESTIVAL DAYS • NON-TRANSFERABLE</text>
+  </svg>
+  `;
+
+  const composites: sharp.OverlayOptions[] = [];
+  if (processedPhotoBuffer) {
+    composites.push({
+      input: processedPhotoBuffer,
+      top: 225,
+      left: 220,
+    });
+  }
+
+  const baseSvgBuffer = Buffer.from(svgCard);
+  const cardPng = await sharp(baseSvgBuffer)
+    .composite(composites)
+    .png({ quality: 95 })
+    .toBuffer();
+
+  return cardPng;
+}
+
+// ----------------------------------------------------
+// Server-Side Direct ZIP Card Export Endpoint
+// ----------------------------------------------------
+const exportZipCardsHandler = async (req: express.Request, res: express.Response) => {
+  try {
+    const list = await loadVolunteers();
+    const departmentQuery = String(req.query.department || req.body?.department || '').trim();
+    const statusQuery = String(req.query.status || req.body?.status || '').trim();
+    const idsQuery = req.query.ids || req.body?.ids;
+
+    let targetVolunteers = [...list];
+
+    // Filter by specific IDs if provided
+    if (idsQuery) {
+      const idArray = Array.isArray(idsQuery)
+        ? idsQuery.map((id) => String(id).trim().toUpperCase())
+        : String(idsQuery)
+            .split(',')
+            .map((id) => id.trim().toUpperCase());
+      targetVolunteers = targetVolunteers.filter((v) =>
+        idArray.includes(String(v.id).trim().toUpperCase())
+      );
+    } else {
+      // Filter by department (case-insensitive & handles 'Arti Seva' or 'Arti')
+      if (departmentQuery && departmentQuery !== 'ALL') {
+        const cleanDept = departmentQuery.toLowerCase().replace(/[^a-z0-9]/g, '');
+        targetVolunteers = targetVolunteers.filter((v) => {
+          const vDept = (v.department || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          return vDept === cleanDept || vDept.includes(cleanDept) || cleanDept.includes(vDept);
+        });
+      }
+
+      // Filter by status if requested
+      if (statusQuery && statusQuery !== 'ALL') {
+        targetVolunteers = targetVolunteers.filter(
+          (v) => (v.status || 'Active').toLowerCase() === statusQuery.toLowerCase()
+        );
+      }
+    }
+
+    if (targetVolunteers.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: `No volunteers found matching the requested filter (Department: "${departmentQuery || 'ALL'}").`,
+      });
+    }
+
+    console.log(
+      `[Server ZIP Export] Generating ${targetVolunteers.length} cards (Department: ${departmentQuery || 'ALL'})...`
+    );
+
+    const zip = new JSZip();
+
+    // Render cards in parallel batches of 10 to maximize speed without overloading CPU
+    const batchSize = 10;
+    for (let i = 0; i < targetVolunteers.length; i += batchSize) {
+      const batch = targetVolunteers.slice(i, i + batchSize);
+      await Promise.all(
+        batch.map(async (vol) => {
+          try {
+            const cardBuffer = await generateServerCardImageBuffer(vol);
+            const safeName = (vol.name || 'Volunteer').replace(/[^a-zA-Z0-9_-]/g, '_');
+            const safeDept = (vol.department || 'Seva').replace(/[^a-zA-Z0-9_-]/g, '_');
+            const fileName = `${vol.id}_${safeName}_${safeDept}.png`;
+            zip.file(fileName, cardBuffer, { binary: true });
+          } catch (cardErr) {
+            console.error(`Error rendering card for ${vol.id}:`, cardErr);
+          }
+        })
+      );
+    }
+
+    const zipBuffer = await zip.generateAsync({
+      type: 'nodebuffer',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 },
+    });
+
+    const dateStamp = new Date().toISOString().split('T')[0];
+    const deptTag = departmentQuery && departmentQuery !== 'ALL'
+      ? departmentQuery.replace(/[^a-zA-Z0-9_-]/g, '_')
+      : 'All';
+    const filename = `ISKCON_Janmashtami_2026_${deptTag}_Cards_${targetVolunteers.length}_${dateStamp}.zip`;
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', zipBuffer.length);
+
+    return res.send(zipBuffer);
+  } catch (err: any) {
+    console.error('Error in exportZipCardsHandler:', err);
+    return res.status(500).json({
+      success: false,
+      error: 'Server error generating card images ZIP: ' + (err?.message || err),
+    });
+  }
+};
+
+apiRouter.get('/volunteers/export/zip', exportZipCardsHandler);
+apiRouter.get('/volunteers/export-zip', exportZipCardsHandler);
+apiRouter.post('/volunteers/export/zip', exportZipCardsHandler);
+apiRouter.post('/volunteers/export-zip', exportZipCardsHandler);
+apiRouter.get('/export/zip', exportZipCardsHandler);
 
 // Storage Diagnostics & Migration Status Endpoint
 apiRouter.get('/admin/storage-status', async (_req, res) => {
