@@ -48,7 +48,7 @@ export default function AdminLogin({ onSuccess, onCancel }: AdminLoginProps) {
           errorMessage = data.error || 'Incorrect PIN. Please enter the valid Admin PIN.';
         } else {
           // If server responded with other status, fallback check
-          if (cleanPin === '2580') {
+          if (cleanPin === '1997') {
             isVerified = true;
             sessionStorage.setItem('iskcon_admin_token', 'local_authenticated');
           } else {
@@ -57,11 +57,11 @@ export default function AdminLogin({ onSuccess, onCancel }: AdminLoginProps) {
         }
       } catch {
         // Direct fallback check if offline or standalone preview
-        if (cleanPin === '2580') {
+        if (cleanPin === '1997') {
           isVerified = true;
           sessionStorage.setItem('iskcon_admin_token', 'offline_authenticated');
         } else {
-          errorMessage = 'Incorrect PIN. Please enter 2580 or your configured Admin PIN.';
+          errorMessage = 'Incorrect PIN. Please enter 1997 or your configured Admin PIN.';
         }
       }
 
