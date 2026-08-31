@@ -95,20 +95,39 @@ export default function DeleteConfirmModal({
             </div>
           </div>
         ) : (
-          <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 max-h-36 overflow-y-auto space-y-1.5">
-            <div className="text-xs font-bold text-slate-700 flex items-center gap-1.5 mb-1">
-              <Users className="w-3.5 h-3.5 text-[#1E40AF]" />
-              <span>Selected {count} Volunteers:</span>
-            </div>
-            {volunteersToDelete.map((v) => (
-              <div
-                key={v.id}
-                className="text-[11px] flex items-center justify-between py-1 px-2 rounded-lg bg-white border border-slate-100"
-              >
-                <span className="font-bold text-slate-900 truncate max-w-[180px]">{v.name}</span>
-                <span className="font-mono text-slate-500 text-[10px]">{v.id}</span>
+          <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+            <div className="flex items-center justify-between font-bold text-slate-800">
+              <div className="flex items-center gap-1.5">
+                <Users className="w-4 h-4 text-[#1E40AF]" />
+                <span>Selected Volunteers for Deletion:</span>
               </div>
-            ))}
+              <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 font-bold text-[11px]">
+                {count} Cards
+              </span>
+            </div>
+
+            <div className="max-h-40 overflow-y-auto space-y-1 pr-1 divide-y divide-slate-100">
+              {volunteersToDelete.slice(0, 20).map((v) => (
+                <div
+                  key={v.id}
+                  className="text-[11px] flex items-center justify-between py-1.5 px-2 rounded-lg bg-white border border-slate-200/70"
+                >
+                  <div className="truncate max-w-[190px]">
+                    <span className="font-bold text-slate-900">{v.name}</span>
+                    <span className="text-[10px] text-slate-500 ml-1.5">({v.department})</span>
+                  </div>
+                  <span className="font-mono text-slate-500 text-[10px] shrink-0 font-semibold">{v.id}</span>
+                </div>
+              ))}
+            </div>
+
+            {count > 20 && (
+              <div className="pt-1 text-center">
+                <span className="text-[11px] font-bold text-slate-500 bg-slate-200/60 px-3 py-1 rounded-full">
+                  ... and {count - 20} more volunteer records selected
+                </span>
+              </div>
+            )}
           </div>
         )}
 
