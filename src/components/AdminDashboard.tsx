@@ -40,6 +40,7 @@ import {
 import VolunteerCard from './VolunteerCard';
 import EditVolunteerModal from './EditVolunteerModal';
 import DeleteConfirmModal from './DeleteConfirmModal';
+import ExportModal from './ExportModal';
 import { AppLogo } from './AppLogo';
 
 interface AdminDashboardProps {
@@ -67,6 +68,9 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
   // Deactivation confirmation modal state
   const [deactivatingVolunteer, setDeactivatingVolunteer] = useState<Volunteer | null>(null);
   const [isDeactivating, setIsDeactivating] = useState(false);
+
+  // Export Data modal state
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
   // Generic action notification
   const [actionNotification, setActionNotification] = useState<{
@@ -317,162 +321,23 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
     }
   };
 
-  // Export Selected Cards as High-Resolution Images (ZIP archive)
-  const handleExportSelectedImages = async () => {
-    const targetVolunteers =
-      selectedIds.length > 0
-        ? volunteers.filter((v) => selectedIds.includes(v.id))
-        : filteredVolunteers.length > 0
-        ? filteredVolunteers
-        : volunteers;
-
-    if (targetVolunteers.length === 0) {
-      alert('No volunteer cards available to export.');
-      return;
-    }
-
-    try {
-      setIsExporting(true);
-      setExportProgress({ current: 0, total: targetVolunteers.length });
-
-      const zip = new JSZip();
-
-      // For each volunteer card, render the DOM element and convert to PNG
-      for (let i = 0; i < targetVolunteers.length; i++) {
-        const vol = targetVolunteers[i];
-        setExportProgress({ current: i + 1, total: targetVolunteers.length });
-
-        const cardEl = document.getElementById(`offscreen-card-${vol.id}`);
-        if (cardEl) {
-          const dataUrl = await toPng(cardEl, {
-            pixelRatio: 3,
-            quality: 0.95,
-            backgroundColor: '#ffffff',
-            fontEmbedCSS: '',
-            skipAutoScale: true,
-          });
-
-          // Extract base64 part
-          const base64Data = dataUrl.replace(/^data:image\/png;base64,/, '');
-          const safeName = vol.name.replace(/[^a-zA-Z0-9_-]/g, '_');
-          const safeDept = vol.department.replace(/[^a-zA-Z0-9_-]/g, '_');
-          const fileName = `${vol.id}_${safeName}_${safeDept}.png`;
-
-          zip.file(fileName, base64Data, { base64: true });
-        }
-      }
-
-      // Generate the ZIP file
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(zipBlob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `ISKCON_Janmashtami_2026_Volunteer_Cards_${targetVolunteers.length}.zip`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-
-      setExportSuccessMsg(
-        `Successfully exported ${targetVolunteers.length} high-quality card images in ZIP!`
-      );
-      setTimeout(() => setExportSuccessMsg(null), 5000);
-    } catch (err) {
-      console.error('Failed to export images:', err);
-      alert('Error exporting images. Please try again.');
-    } finally {
-      setIsExporting(false);
-    }
+  // Open Export Data Modal with current selection/filter
+  const handleOpenExportModal = () => {
+    setIsExportModalOpen(true);
   };
 
-  // Export Volunteers Data as structured CSV for Excel & Google Sheets
-  const handleExportCSV = () => {
-    const targetVolunteers =
-      selectedIds.length > 0
-        ? volunteers.filter((v) => selectedIds.includes(v.id))
-        : filteredVolunteers.length > 0
-        ? filteredVolunteers
-        : volunteers;
+  // Quick select all active
+  const handleSelectAllActive = () => {
+    const activeIds = volunteers.filter((v) => v.status !== 'Deactivated').map((v) => v.id);
+    setSelectedIds(activeIds);
+    showNotification(`Selected all ${activeIds.length} active volunteer cards.`);
+  };
 
-    if (targetVolunteers.length === 0) {
-      alert('No volunteer records available to export.');
-      return;
-    }
-
-    // CSV Headers
-    const headers = [
-      'Volunteer ID',
-      'Full Name',
-      'Phone Number',
-      'Department',
-      'Department HOD Name',
-      'Status',
-      'Card Status',
-      'Card Image URL',
-      'Photo URL',
-      'Registration Date',
-    ];
-
-    // Helper to safely format cell content for CSV compatible with Excel & Google Sheets
-    const escapeCSV = (val: string | undefined | null): string => {
-      if (val === undefined || val === null) return '""';
-      const str = String(val).trim();
-      // Always quote cells and escape double quotes
-      return `"${str.replace(/"/g, '""')}"`;
-    };
-
-    const rows = targetVolunteers.map((vol) => {
-      const formattedDate = vol.createdAt
-        ? new Date(vol.createdAt).toLocaleString('en-IN', {
-            dateStyle: 'medium',
-            timeStyle: 'short',
-          })
-        : '';
-
-      const photoUrl =
-        vol.imageUrl && (vol.imageUrl.startsWith('http://') || vol.imageUrl.startsWith('https://'))
-          ? vol.imageUrl
-          : vol.imageUrl && vol.imageUrl.startsWith('data:')
-          ? 'Uploaded Photo (Base64)'
-          : '';
-
-      const cardUrl =
-        (vol as any).cardImageUrl ||
-        (vol.imageUrl && (vol.imageUrl.startsWith('http://') || vol.imageUrl.startsWith('https://'))
-          ? vol.imageUrl
-          : '');
-
-      return [
-        escapeCSV(vol.id),
-        escapeCSV(vol.name),
-        escapeCSV(vol.phone ? `+91 ${vol.phone}` : ''),
-        escapeCSV(vol.department || 'General Seva'),
-        escapeCSV(vol.hodName || ''),
-        escapeCSV(vol.status),
-        escapeCSV(vol.cardStatus || 'Generated'),
-        escapeCSV(cardUrl),
-        escapeCSV(photoUrl),
-        escapeCSV(formattedDate),
-      ].join(',');
-    });
-
-    // Prepend UTF-8 BOM (\uFEFF) for native Excel/Sheets Hindi and Unicode character support
-    const csvContent = '\uFEFF' + [headers.map(escapeCSV).join(','), ...rows].join('\r\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    const dateStamp = new Date().toISOString().split('T')[0];
-    link.download = `ISKCON_Janmashtami_2026_Volunteers_${dateStamp}_(${targetVolunteers.length}).csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-
-    setExportSuccessMsg(
-      `Successfully exported ${targetVolunteers.length} volunteer records to CSV!`
-    );
-    setTimeout(() => setExportSuccessMsg(null), 5000);
+  // Quick select all in entire directory
+  const handleSelectAllTotal = () => {
+    const allIds = volunteers.map((v) => v.id);
+    setSelectedIds(allIds);
+    showNotification(`Selected all ${allIds.length} volunteer cards.`);
   };
 
   const isAllSelected =
@@ -544,51 +409,33 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
               </button>
             )}
 
-            {/* Export CSV Button */}
+            {/* Comprehensive Export Data Button (CSV, ZIP, JSON, Print) */}
             <button
               type="button"
-              id="export-csv-btn"
-              onClick={handleExportCSV}
+              id="open-export-modal-btn"
+              onClick={handleOpenExportModal}
               disabled={volunteers.length === 0}
-              title="Export volunteer data as CSV for Excel / Google Sheets"
-              className="w-full sm:w-auto py-2 px-3.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 min-h-[36px]"
+              title="Export all data, spreadsheet, or card images"
+              className="w-full sm:w-auto py-2 px-4 rounded-xl blue-gradient hover:opacity-95 text-white font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 min-h-[36px]"
             >
-              <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate">
+              <Download className="w-4 h-4 shrink-0" />
+              <span>
                 {isAnySelected
-                  ? `Export Selected (${selectedIds.length}) CSV`
-                  : `Export CSV (${filteredVolunteers.length})`}
+                  ? `Export Selected (${selectedIds.length}) Data / Cards`
+                  : `Export All Data (${volunteers.length})`}
               </span>
             </button>
 
-            {/* Export Cards Button */}
-            <button
-              type="button"
-              id="export-selected-images-btn"
-              onClick={handleExportSelectedImages}
-              disabled={isExporting || volunteers.length === 0}
-              className="w-full sm:w-auto py-2 px-3.5 rounded-xl blue-gradient hover:opacity-95 text-white font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 min-h-[36px]"
+            {/* Direct CSV Download */}
+            <a
+              href="/api/volunteers/export/csv"
+              download
+              title="Direct instant CSV spreadsheet download"
+              className="hidden md:inline-flex py-2 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs transition-all items-center gap-1.5 cursor-pointer shadow-xs min-h-[36px]"
             >
-              {isExporting ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-                  <span>
-                    Exporting ({exportProgress.current}/{exportProgress.total})...
-                  </span>
-                </>
-              ) : (
-                <>
-                  <Download className="w-3.5 h-3.5 shrink-0" />
-                  <span className="truncate">
-                    {isAnySelected
-                      ? `Export Selected (${selectedIds.length}) Cards`
-                      : selectedDepartment !== 'ALL'
-                      ? `Export ${selectedDepartment} (${filteredVolunteers.length})`
-                      : `Export (${filteredVolunteers.length}) Cards`}
-                  </span>
-                </>
-              )}
-            </button>
+              <FileSpreadsheet className="w-3.5 h-3.5 shrink-0" />
+              <span>CSV Spreadsheet</span>
+            </a>
 
             <button
               type="button"
@@ -789,45 +636,73 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
         </div>
       )}
 
-      {/* Selection Toolbar */}
+      {/* Selection Toolbar & Quick Filters */}
       {volunteers.length > 0 && (
-        <div className="flex items-center justify-between px-1 gap-2 flex-wrap">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between px-1 gap-2 flex-wrap bg-blue-50/50 p-2 rounded-xl border border-blue-100">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <button
               type="button"
               id="select-all-btn"
               onClick={handleToggleSelectAll}
-              className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-bold text-xs flex items-center gap-2 transition-colors cursor-pointer shadow-2xs min-h-[38px]"
+              className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs min-h-[34px]"
             >
               {isAllSelected ? (
                 <>
-                  <CheckSquare className="w-4 h-4 text-[#1E40AF] shrink-0" />
+                  <CheckSquare className="w-3.5 h-3.5 text-[#1E40AF] shrink-0" />
                   <span>Deselect All</span>
                 </>
               ) : (
                 <>
-                  <Square className="w-4 h-4 text-slate-400 shrink-0" />
-                  <span>Select All ({filteredVolunteers.length})</span>
+                  <Square className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <span>Select Filtered ({filteredVolunteers.length})</span>
                 </>
               )}
             </button>
+
+            {volunteers.length > filteredVolunteers.length && (
+              <button
+                type="button"
+                id="select-all-total-btn"
+                onClick={handleSelectAllTotal}
+                className="px-2.5 py-1.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-[#1E40AF] font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer min-h-[34px]"
+              >
+                <span>Select All ({volunteers.length})</span>
+              </button>
+            )}
+
+            {activeCount > 0 && selectedIds.length !== activeCount && (
+              <button
+                type="button"
+                id="select-all-active-btn"
+                onClick={handleSelectAllActive}
+                className="hidden sm:inline-flex px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-xs items-center gap-1 transition-colors cursor-pointer min-h-[34px]"
+              >
+                <span>Select Active ({activeCount})</span>
+              </button>
+            )}
 
             {isAnySelected && (
               <button
                 type="button"
                 id="selection-bulk-delete-btn"
                 onClick={handleOpenBulkDeleteModal}
-                className="px-3 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs min-h-[38px]"
+                className="px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs min-h-[34px]"
               >
                 <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                <span>Delete Selected ({selectedIds.length})</span>
+                <span>Delete ({selectedIds.length})</span>
               </button>
             )}
           </div>
 
-          <span className="text-[11px] text-slate-500 text-right">
-            Showing {filteredVolunteers.length} of {volunteers.length} cards
-          </span>
+          <div className="flex items-center gap-2 text-[11px] text-slate-600 font-medium">
+            {isAnySelected ? (
+              <span className="text-[#1E40AF] font-bold bg-white px-2 py-0.5 rounded-md border border-blue-200">
+                {selectedIds.length} Selected
+              </span>
+            ) : (
+              <span>Showing {filteredVolunteers.length} of {volunteers.length}</span>
+            )}
+          </div>
         </div>
       )}
 
@@ -1189,133 +1064,65 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
         </div>
       )}
 
-      {/* Off-screen Card Elements Container for Batch High-Res Image Generation (White & Blue Theme) */}
-      <div
-        id="offscreen-cards-container"
-        style={{
-          position: 'fixed',
-          left: '-9999px',
-          top: 0,
-          opacity: 0,
-          pointerEvents: 'none',
-        }}
-      >
-        {volunteers.map((vol) => {
-          const isDeactivated = vol.status === 'Deactivated';
-
-          return (
-            <div
-              key={vol.id}
-              id={`offscreen-card-${vol.id}`}
-              className="w-[340px] rounded-3xl overflow-hidden shadow-xl bg-white border border-blue-200 text-slate-900 select-none"
-              style={{
-                fontFamily: 'system-ui, -apple-system, sans-serif',
-              }}
-            >
-              {/* Header: Blue Theme */}
-              <div className="relative blue-gradient text-white px-4 pt-3.5 pb-4 text-center overflow-hidden">
-                <div className="flex items-center justify-between relative z-10">
-                  <div className="flex items-center gap-2">
-                    <div className="w-12 h-12 rounded-full bg-white p-1 shadow-md border-2 border-blue-200/80 flex items-center justify-center overflow-hidden shrink-0">
-                      <AppLogo className="w-full h-full object-contain" size={44} />
-                    </div>
-                    <div className="text-left leading-none">
-                      <p className="text-[10px] text-sky-200 font-bold uppercase tracking-wider">ISKCON</p>
-                      <p className="text-[9px] text-blue-100 font-medium">Janmashtami</p>
-                    </div>
-                  </div>
-
-                  <div className="text-right">
-                    <span className="inline-block bg-white/15 backdrop-blur-xs border border-white/25 text-white px-2.5 py-0.5 rounded-full text-[10px] tracking-wider uppercase font-extrabold">
-                      HARE KRISHNA
-                    </span>
-                  </div>
-                </div>
-
-                <div className="absolute bottom-0 inset-x-0 h-1 bg-gradient-to-r from-blue-300 via-sky-200 to-amber-300" />
-              </div>
-
-              {/* Badge */}
-              <div className="flex justify-center -mt-3 relative z-20">
-                {isDeactivated ? (
-                  <div className="bg-gradient-to-r from-red-700 to-rose-600 text-white font-bold text-xs tracking-widest uppercase px-5 py-1 rounded-full shadow-md border-2 border-white flex items-center gap-1.5">
-                    <ShieldCheck className="w-3.5 h-3.5 text-rose-200" />
-                    <span>CARD DEACTIVATED</span>
-                  </div>
-                ) : (
-                  <div className="bg-gradient-to-r from-[#0F294A] to-[#1E40AF] text-white font-bold text-xs tracking-widest uppercase px-5 py-1 rounded-full shadow-md border-2 border-white flex items-center gap-1.5">
-                    <ShieldCheck className="w-3.5 h-3.5 text-sky-300" />
-                    <span>VOLUNTEER</span>
-                  </div>
-                )}
-              </div>
-
-              {/* Card Body */}
-              <div className="p-4 pt-3 space-y-3 bg-gradient-to-b from-blue-50/40 via-white to-sky-50/30">
-                <div className="flex flex-col items-center">
-                  <div className={`relative w-32 h-32 rounded-2xl overflow-hidden shadow-md border-2 bg-slate-50 ring-2 ${
-                    isDeactivated ? 'border-rose-400 ring-rose-100' : 'border-[#1E40AF] ring-blue-100'
-                  }`}>
-                    <img
-                      src={vol.imageUrl}
-                      alt={vol.name}
-                      crossOrigin="anonymous"
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        const target = e.currentTarget;
-                        if (target.src.endsWith('.jpg')) {
-                          target.src = target.src.replace(/\.jpg$/, '.webp');
-                        } else if (target.src.endsWith('.webp')) {
-                          target.src = target.src.replace(/\.webp$/, '.jpg');
-                        }
-                      }}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
-                </div>
-
-                <div className="text-center pt-0.5">
-                  <h3 className="text-2xl font-bold text-slate-900 tracking-tight capitalize leading-tight font-serif-cultural">
-                    {vol.name}
-                  </h3>
-                </div>
-
-                <div className="rounded-xl bg-white border border-blue-100 p-3.5 shadow-xs space-y-2 text-xs">
-                  <div className="flex items-center justify-between pb-2 border-b border-blue-50">
-                    <span className="font-semibold text-slate-500">Department</span>
-                    <span className="font-bold text-[#1E40AF] bg-blue-50 border border-blue-200 px-2.5 py-0.5 rounded-md text-right">
-                      {vol.department}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between pb-2 border-b border-blue-50">
-                    <span className="font-semibold text-slate-500">Department HOD</span>
-                    <span className="font-bold text-slate-900 text-right capitalize">
-                      {vol.hodName}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-slate-500">Contact Phone</span>
-                    <span className="font-mono font-bold text-slate-800 text-right">
-                      +91 {vol.phone}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="text-center pt-1.5">
-                  <p className="text-[10px] text-slate-500 font-medium">
-                    Janmashtami 2026 Seva Committee
-                  </p>
-                  <p className="text-[8px] text-slate-400 uppercase tracking-widest mt-0.5">
-                    Valid during festival days • Non-transferable
-                  </p>
-                </div>
-              </div>
+      {/* Sticky Floating Bulk Action Bar when items are selected */}
+      {isAnySelected && (
+        <div className="fixed bottom-4 inset-x-3 sm:inset-x-6 max-w-xl mx-auto z-40 bg-slate-900/95 backdrop-blur-md text-white rounded-2xl shadow-2xl border border-slate-700/80 p-3 sm:p-4 flex items-center justify-between gap-2.5 animate-in slide-in-from-bottom-5 duration-200">
+          <div className="flex items-center gap-2">
+            <span className="w-7 h-7 rounded-lg bg-blue-600 font-bold text-xs flex items-center justify-center text-white shrink-0">
+              {selectedIds.length}
+            </span>
+            <div className="leading-tight">
+              <p className="text-xs font-bold text-white">
+                {selectedIds.length === 1 ? '1 card selected' : `${selectedIds.length} cards selected`}
+              </p>
+              <p className="text-[10px] text-slate-300">
+                Bulk operations ready
+              </p>
             </div>
-          );
-        })}
-      </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              id="floating-export-btn"
+              onClick={handleOpenExportModal}
+              className="px-3 py-1.5 rounded-xl bg-[#1E40AF] hover:bg-blue-700 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer min-h-[34px]"
+            >
+              <Download className="w-3.5 h-3.5 shrink-0" />
+              <span>Export</span>
+            </button>
+
+            <button
+              type="button"
+              id="floating-delete-btn"
+              onClick={handleOpenBulkDeleteModal}
+              className="px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center gap-1.5 transition-all shadow-xs cursor-pointer min-h-[34px]"
+            >
+              <Trash2 className="w-3.5 h-3.5 shrink-0" />
+              <span>Delete</span>
+            </button>
+
+            <button
+              type="button"
+              id="floating-deselect-btn"
+              onClick={() => setSelectedIds([])}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 text-xs transition-colors cursor-pointer"
+              title="Deselect All"
+            >
+              <Square className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Export All / Filtered / Selected Data Modal */}
+      <ExportModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        allVolunteers={volunteers}
+        filteredVolunteers={filteredVolunteers}
+        selectedIds={selectedIds}
+      />
     </div>
   );
 }
