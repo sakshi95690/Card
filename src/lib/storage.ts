@@ -1,4 +1,4 @@
-import { Volunteer, CardStatus, AdminNotification } from '../types';
+import { Volunteer, CardStatus, AdminNotification, FestivalEvent } from '../types';
 
 const NOTIFICATIONS_KEY = 'iskcon_admin_notifications_2026';
 const CHANNEL_NAME = 'iskcon_volunteers_broadcast_channel';
@@ -36,12 +36,240 @@ function extractErrorMessage(data: any, fallbackMessage: string): string {
 
 const DIRECT_SUPABASE_DATA_URL = 'https://dgmhavoihauufpvpmmvq.supabase.co/storage/v1/object/public/volunteer-cards/data/volunteers-data.json';
 
+// ----------------------------------------------------
+// Festival Events Client API
+// ----------------------------------------------------
+
+/**
+ * Fetch all festival events from the server
+ */
+export async function fetchAllEvents(): Promise<FestivalEvent[]> {
+  try {
+    const res = await fetch('/api/events', {
+      headers: {
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+      },
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.success && Array.isArray(data?.events)) {
+        return data.events;
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to fetch events from /api/events:', err);
+  }
+
+  // Fallback defaults in case server is starting
+  return [
+    {
+      id: 'janmashtami-2026',
+      name: 'Sri Krishna Janmashtami',
+      year: 2026,
+      startDate: '2026-09-04',
+      endDate: '2026-09-05',
+      description: 'Sri Krishna Janmashtami Mahotsav 2026 Grand Celebration Volunteer Seva',
+      departments: [
+        'Abhishekam Seva',
+        'Arti Seva',
+        'BBT',
+        'Bhoga Offering',
+        'Bhoga Preparation',
+        'Book Distribution',
+        'Book Stall',
+        'BPS',
+        'Cleaning',
+        'Crisis Mgmt',
+        'Crowd Control',
+        'Decoration',
+        'DYPH',
+        'Electricity',
+        'G. Prasadam Distribution',
+        'Gift Distribution',
+        'Govindas',
+        'IYF',
+        'Japa Seva',
+        'Kirtan Seva',
+        'Kitchen',
+        'Light',
+        'Media Seva',
+        'Medical',
+        'Nuttts',
+        'Parking',
+        'Parking & Traffic',
+        'Plumber',
+        'Priest Seva',
+        'Reception Seva',
+        'Security',
+        'Shoe Stall',
+        'Sound',
+        'Tent',
+        'V. Prasadam Distribution',
+        'Volunteer Care Seva',
+        'Welcome Seva',
+      ],
+      isActive: true,
+      isDefault: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    },
+  ];
+}
+
+/**
+ * Fetch single festival event by ID
+ */
+export async function fetchEventById(id: string): Promise<FestivalEvent | null> {
+  try {
+    const res = await fetch(`/api/events/${encodeURIComponent(id)}`, {
+      headers: { 'Cache-Control': 'no-cache' },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.success && data?.event) {
+        return data.event;
+      }
+    }
+  } catch (err) {
+    console.warn(`Failed to fetch event ${id}:`, err);
+  }
+
+  const all = await fetchAllEvents();
+  return all.find((e) => e.id.toLowerCase() === id.toLowerCase()) || null;
+}
+
+/**
+ * Create a new Festival / Event (Admin action)
+ */
+export async function createFestivalEvent(
+  eventData: Partial<FestivalEvent>
+): Promise<FestivalEvent> {
+  const res = await fetch('/api/events', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(eventData),
+  });
+
+  const data = await res.json();
+  if (res.ok && data?.success && data?.event) {
+    try {
+      broadcastChannel?.postMessage({
+        type: 'EVENTS_UPDATED',
+      });
+    } catch {
+      // ignore
+    }
+    return data.event;
+  }
+
+  throw new Error(extractErrorMessage(data, 'Failed to create festival event'));
+}
+
+/**
+ * Update an existing Festival / Event (Admin action)
+ */
+export async function updateFestivalEvent(
+  id: string,
+  eventData: Partial<FestivalEvent>
+): Promise<FestivalEvent> {
+  const res = await fetch(`/api/events/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(eventData),
+  });
+
+  const data = await res.json();
+  if (res.ok && data?.success && data?.event) {
+    try {
+      broadcastChannel?.postMessage({
+        type: 'EVENTS_UPDATED',
+      });
+    } catch {
+      // ignore
+    }
+    return data.event;
+  }
+
+  throw new Error(extractErrorMessage(data, 'Failed to update festival event'));
+}
+
+/**
+ * Delete a Festival / Event (Admin action)
+ */
+export async function deleteFestivalEvent(id: string): Promise<boolean> {
+  const res = await fetch(`/api/events/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+
+  const data = await res.json();
+  if (res.ok && data?.success) {
+    try {
+      broadcastChannel?.postMessage({
+        type: 'EVENTS_UPDATED',
+      });
+    } catch {
+      // ignore
+    }
+    return true;
+  }
+
+  throw new Error(extractErrorMessage(data, 'Failed to delete festival event'));
+}
+
+/**
+ * Add a department to a festival event
+ */
+export async function addDepartmentToEvent(
+  eventId: string,
+  departmentName: string
+): Promise<string[]> {
+  const res = await fetch(`/api/events/${encodeURIComponent(eventId)}/departments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ departmentName }),
+  });
+
+  const data = await res.json();
+  if (res.ok && data?.success && Array.isArray(data?.departments)) {
+    return data.departments;
+  }
+
+  throw new Error(extractErrorMessage(data, 'Failed to add department'));
+}
+
+/**
+ * Remove a department from a festival event
+ */
+export async function removeDepartmentFromEvent(
+  eventId: string,
+  departmentName: string
+): Promise<string[]> {
+  const res = await fetch(
+    `/api/events/${encodeURIComponent(eventId)}/departments/${encodeURIComponent(departmentName)}`,
+    {
+      method: 'DELETE',
+    }
+  );
+
+  const data = await res.json();
+  if (res.ok && data?.success && Array.isArray(data?.departments)) {
+    return data.departments;
+  }
+
+  throw new Error(extractErrorMessage(data, 'Failed to remove department'));
+}
+
 /**
  * Fetch all volunteers directly from the central database (Cross-device persistence)
  */
-export async function fetchAllVolunteers(): Promise<Volunteer[]> {
+export async function fetchAllVolunteers(eventId?: string): Promise<Volunteer[]> {
   try {
-    const res = await fetch('/api/volunteers', {
+    const url = eventId && eventId !== 'ALL'
+      ? `/api/volunteers?eventId=${encodeURIComponent(eventId)}`
+      : '/api/volunteers';
+
+    const res = await fetch(url, {
       headers: {
         'Cache-Control': 'no-cache',
         'Pragma': 'no-cache',
@@ -72,6 +300,9 @@ export async function fetchAllVolunteers(): Promise<Volunteer[]> {
     if (fallbackRes.ok) {
       const fallbackData = await fallbackRes.json();
       if (Array.isArray(fallbackData)) {
+        if (eventId && eventId !== 'ALL') {
+          return fallbackData.filter((v: any) => (v.eventId || 'janmashtami-2026') === eventId);
+        }
         return fallbackData;
       }
     }
@@ -127,6 +358,8 @@ export async function registerVolunteerRecord(formData: {
   hodName: string;
   department: string;
   imageUrl: string;
+  eventId?: string;
+  eventName?: string;
 }): Promise<Volunteer> {
   const safeName = String(formData?.name || '').trim();
   const rawPhone = String(formData?.phone || '');
@@ -134,6 +367,8 @@ export async function registerVolunteerRecord(formData: {
   const safeHodName = String(formData?.hodName || '').trim();
   const safeDepartment = String(formData?.department || '').trim();
   const safeImageUrl = String(formData?.imageUrl || '').trim();
+  const safeEventId = formData?.eventId || 'janmashtami-2026';
+  const safeEventName = formData?.eventName || 'Sri Krishna Janmashtami';
 
   const payload = {
     name: safeName,
@@ -143,6 +378,8 @@ export async function registerVolunteerRecord(formData: {
     department: safeDepartment,
     imageUrl: safeImageUrl,
     cardStatus: 'Generated',
+    eventId: safeEventId,
+    eventName: safeEventName,
   };
 
   let response: Response;
@@ -221,7 +458,7 @@ export async function registerVolunteerRecord(formData: {
 
   if (response.status === 409 || isDuplicate) {
     const errorObj: any = new Error(
-      errorMessage || 'This mobile number is already registered and a volunteer card has already been generated.'
+      errorMessage || 'This mobile number is already registered for this festival event.'
     );
     errorObj.isDuplicate = true;
     errorObj.existingVolunteer = data?.volunteer || null;
@@ -323,6 +560,8 @@ export async function updateVolunteerRecord(
     imageUrl?: string;
     status?: 'Active' | 'Deactivated' | 'Verified' | 'Pending';
     cardStatus?: CardStatus;
+    eventId?: string;
+    eventName?: string;
   }
 ): Promise<Volunteer> {
   const cleanId = String(id || '').trim();
