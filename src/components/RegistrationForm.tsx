@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { User, Phone, UserCheck, AlertCircle, Loader2, RefreshCw, IdCard } from 'lucide-react';
-import { DEPARTMENTS, Volunteer } from '../types';
-import { registerVolunteerRecord } from '../lib/storage';
+import React, { useState, useEffect } from 'react';
+import { User, Phone, UserCheck, AlertCircle, Loader2, Calendar, IdCard } from 'lucide-react';
+import { DEPARTMENTS, Volunteer, FestivalEvent } from '../types';
+import { registerVolunteerRecord, fetchAllEvents } from '../lib/storage';
 import ImageUploader from './ImageUploader';
 import { AppLogo } from './AppLogo';
 
@@ -15,6 +15,8 @@ interface FormState {
   hodName: string;
   department: string;
   imageUrl: string;
+  eventId: string;
+  eventName: string;
 }
 
 interface FormErrors {
@@ -23,22 +25,65 @@ interface FormErrors {
   hodName?: string;
   department?: string;
   imageUrl?: string;
+  eventId?: string;
   general?: string;
   isDuplicate?: boolean;
   duplicateVolunteer?: Volunteer | null;
 }
 
 export default function RegistrationForm({ onSuccess }: RegistrationFormProps) {
+  const [events, setEvents] = useState<FestivalEvent[]>([]);
+  const [loadingEvents, setLoadingEvents] = useState(true);
+
   const [formData, setFormData] = useState<FormState>({
     name: '',
     phone: '',
     hodName: '',
     department: '-- Select --',
     imageUrl: '',
+    eventId: 'janmashtami-2026',
+    eventName: 'Sri Krishna Janmashtami',
   });
 
   const [errors, setErrors] = useState<FormErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Load events on mount
+  useEffect(() => {
+    let isMounted = true;
+    async function load() {
+      try {
+        setLoadingEvents(true);
+        const list = await fetchAllEvents();
+        if (isMounted && list.length > 0) {
+          setEvents(list);
+          // Find default or first active event
+          const defaultEvent = list.find((e) => e.isDefault && e.isActive !== false) || list.find((e) => e.isActive !== false) || list[0];
+          if (defaultEvent) {
+            setFormData((prev) => ({
+              ...prev,
+              eventId: defaultEvent.id,
+              eventName: defaultEvent.name,
+            }));
+          }
+        }
+      } catch (err) {
+        console.error('Error loading events for registration form:', err);
+      } finally {
+        if (isMounted) setLoadingEvents(false);
+      }
+    }
+    load();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Active event object
+  const currentEvent = events.find((e) => e.id === formData.eventId) || events[0];
+  const activeDepartments = currentEvent?.departments && currentEvent.departments.length > 0
+    ? currentEvent.departments
+    : DEPARTMENTS;
 
   const validate = (): boolean => {
     const newErrors: FormErrors = {};
@@ -94,7 +139,7 @@ export default function RegistrationForm({ onSuccess }: RegistrationFormProps) {
     try {
       const selectedDept =
         !formData.department || formData.department === '-- Select --'
-          ? 'General Seva'
+          ? (activeDepartments[0] || 'General Seva')
           : formData.department.trim();
 
       const createdVolunteer = await registerVolunteerRecord({
@@ -103,6 +148,8 @@ export default function RegistrationForm({ onSuccess }: RegistrationFormProps) {
         hodName: formData.hodName ? formData.hodName.trim() : '',
         department: selectedDept,
         imageUrl: formData.imageUrl,
+        eventId: formData.eventId,
+        eventName: currentEvent ? currentEvent.name : formData.eventName,
       });
 
       onSuccess(createdVolunteer);
@@ -145,7 +192,7 @@ export default function RegistrationForm({ onSuccess }: RegistrationFormProps) {
 
             <div>
               <div className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-white/20 text-sky-200 text-[10px] sm:text-xs font-bold uppercase tracking-wider">
-                Janmashtami 2026
+                {currentEvent ? `${currentEvent.name} ${currentEvent.year || ''}` : 'Janmashtami 2026'}
               </div>
 
               <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-white font-serif-cultural mt-1">
@@ -191,6 +238,49 @@ export default function RegistrationForm({ onSuccess }: RegistrationFormProps) {
                       </button>
                     </div>
                   )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Festival / Event Selector (Shows when there are multiple active events or to allow switching) */}
+          {events.length > 1 && (
+            <div id="field-eventId" className="space-y-1">
+              <label htmlFor="volunteer-festival-event" className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+                Festival / Event <span className="text-[#1E40AF]">*</span>
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                  <Calendar className="w-4 h-4" />
+                </div>
+                <select
+                  id="volunteer-festival-event"
+                  name="eventId"
+                  value={formData.eventId}
+                  onChange={(e) => {
+                    const selId = e.target.value;
+                    const selEvent = events.find((ev) => ev.id === selId);
+                    setFormData({
+                      ...formData,
+                      eventId: selId,
+                      eventName: selEvent ? selEvent.name : formData.eventName,
+                      department: '-- Select --', // Reset dept on festival switch
+                    });
+                  }}
+                  className="w-full pl-9 pr-8 py-2 rounded-lg border border-slate-200 focus:border-blue-500 focus:bg-white focus:ring-1 focus:ring-blue-200 text-sm text-slate-800 bg-slate-50/50 outline-none transition-all appearance-none cursor-pointer"
+                >
+                  {events
+                    .filter((ev) => ev.isActive !== false)
+                    .map((ev) => (
+                      <option key={ev.id} value={ev.id}>
+                        {ev.name} {ev.year ? `(${ev.year})` : ''}
+                      </option>
+                    ))}
+                </select>
+                <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-slate-500">
+                  <svg className="w-4 h-4 fill-current" viewBox="0 0 20 20">
+                    <path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" />
+                  </svg>
                 </div>
               </div>
             </div>
@@ -308,7 +398,7 @@ export default function RegistrationForm({ onSuccess }: RegistrationFormProps) {
                 }`}
               >
                 <option value="-- Select --">-- Select Department --</option>
-                {DEPARTMENTS.map((dept) => (
+                {activeDepartments.map((dept) => (
                   <option key={dept} value={dept}>
                     {dept}
                   </option>
