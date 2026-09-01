@@ -28,6 +28,19 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+interface FestivalEventRecord {
+  id: string; // unique slug e.g. 'janmashtami-2026'
+  name: string; // e.g. 'Sri Krishna Janmashtami'
+  year: number | string; // e.g. 2026
+  startDate?: string;
+  endDate?: string;
+  description?: string;
+  departments: string[];
+  isActive: boolean;
+  isDefault?: boolean;
+  createdAt: string;
+}
+
 interface VolunteerRecord {
   id: string;
   name: string;
@@ -40,6 +53,8 @@ interface VolunteerRecord {
   createdAt: string;
   status: 'Verified' | 'Pending' | 'Active' | 'Deactivated';
   cardStatus: 'Generated' | 'Printed' | 'Issued';
+  eventId?: string;
+  eventName?: string;
 }
 
 // ----------------------------------------------------
@@ -719,11 +734,30 @@ async function loadVolunteers(): Promise<VolunteerRecord[]> {
 
   inMemoryVolunteers = list;
 
-  return list.map((v: any) => ({
-    ...v,
-    cardStatus: v.cardStatus || 'Generated',
-    status: v.status || 'Active',
-  }));
+  let needsBackfill = false;
+  const normalized = list.map((v: any) => {
+    const eventId = v.eventId || 'janmashtami-2026';
+    const eventName = v.eventName || 'Sri Krishna Janmashtami';
+    if (!v.eventId || !v.eventName) {
+      needsBackfill = true;
+    }
+    return {
+      ...v,
+      eventId,
+      eventName,
+      cardStatus: v.cardStatus || 'Generated',
+      status: v.status || 'Active',
+    };
+  });
+
+  if (needsBackfill && normalized.length > 0) {
+    inMemoryVolunteers = normalized;
+    saveVolunteers(normalized).catch((err) => {
+      console.warn('[Storage] Notice saving normalized volunteer event backfill:', err);
+    });
+  }
+
+  return normalized;
 }
 
 async function saveVolunteers(volunteers: VolunteerRecord[]): Promise<boolean> {
@@ -757,6 +791,243 @@ async function saveVolunteers(volunteers: VolunteerRecord[]): Promise<boolean> {
 
   // Operation succeeds if written to in-memory/local or remote store
   return localSuccess || remoteSuccess || true;
+}
+
+// ----------------------------------------------------
+// Festival Events & Dynamic Departments Storage Layer
+// ----------------------------------------------------
+const DEFAULT_DEPARTMENTS = [
+  'Abhishekam Seva',
+  'Arti Seva',
+  'BBT',
+  'Bhoga Offering',
+  'Bhoga Preparation',
+  'Book Distribution',
+  'Book Stall',
+  'BPS',
+  'Cleaning',
+  'Crisis Mgmt',
+  'Crowd Control',
+  'Decoration',
+  'DYPH',
+  'Electricity',
+  'G. Prasadam Distribution',
+  'Gift Distribution',
+  'Govindas',
+  'IYF',
+  'Japa Seva',
+  'Kirtan Seva',
+  'Kitchen',
+  'Light',
+  'Media Seva',
+  'Medical',
+  'Nuttts',
+  'Parking',
+  'Parking & Traffic',
+  'Plumber',
+  'Priest Seva',
+  'Reception Seva',
+  'Security',
+  'Shoe Stall',
+  'Sound',
+  'Tent',
+  'V. Prasadam Distribution',
+  'Volunteer Care Seva',
+  'Welcome Seva',
+];
+
+const INITIAL_DEFAULT_EVENTS: FestivalEventRecord[] = [
+  {
+    id: 'janmashtami-2026',
+    name: 'Sri Krishna Janmashtami',
+    year: 2026,
+    startDate: '2026-09-04',
+    endDate: '2026-09-05',
+    description: 'Sri Krishna Janmashtami Mahotsav 2026 Grand Celebration Volunteer Seva',
+    departments: [...DEFAULT_DEPARTMENTS],
+    isActive: true,
+    isDefault: true,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  },
+  {
+    id: 'ratha-yatra-2026',
+    name: 'Sri Jagannath Ratha Yatra',
+    year: 2026,
+    startDate: '2026-07-16',
+    endDate: '2026-07-16',
+    description: 'Annual Sri Jagannath Ratha Yatra Festival & Chariot Procession Seva',
+    departments: [
+      'Ratha Rope Pulling & Security',
+      'Chariot Decoration',
+      'Prasadam Distribution',
+      'Kirtan & Sankirtan',
+      'Crowd Control & Traffic',
+      'Water & Refreshment Seva',
+      'Medical & First Aid',
+      'Book Distribution',
+      'Cleaning & Cleanliness Seva',
+      'VIP & Guest Care',
+      'Media & Photography',
+      'General Seva',
+    ],
+    isActive: true,
+    isDefault: false,
+    createdAt: '2026-01-02T00:00:00.000Z',
+  },
+  {
+    id: 'gaura-purnima-2026',
+    name: 'Sri Gaura Purnima',
+    year: 2026,
+    startDate: '2026-03-03',
+    endDate: '2026-03-03',
+    description: 'Appearance Day Celebration of Sri Chaitanya Mahaprabhu',
+    departments: [
+      'Abhishekam Seva',
+      'Arti Seva',
+      'Maha Prasadam Feast',
+      'Decoration & Flower Seva',
+      'Kirtan Mela',
+      'Book Distribution',
+      'Temple Hall & Crowd Care',
+      'Kitchen & Cooking Seva',
+      'General Seva',
+    ],
+    isActive: true,
+    isDefault: false,
+    createdAt: '2026-01-03T00:00:00.000Z',
+  },
+  {
+    id: 'rama-navami-2026',
+    name: 'Sri Rama Navami',
+    year: 2026,
+    startDate: '2026-04-18',
+    endDate: '2026-04-18',
+    description: 'Appearance Day of Lord Sri Ramachandra Mahotsav',
+    departments: [
+      'Abhishekam Seva',
+      'Arti Seva',
+      'Prasadam Distribution',
+      'Flower & Altar Decoration',
+      'Bhajan & Kirtan',
+      'Crowd & Security',
+      'General Seva',
+    ],
+    isActive: true,
+    isDefault: false,
+    createdAt: '2026-01-04T00:00:00.000Z',
+  },
+  {
+    id: 'govardhan-puja-2026',
+    name: 'Sri Govardhan Puja & Annakuta',
+    year: 2026,
+    startDate: '2026-11-09',
+    endDate: '2026-11-09',
+    description: 'Sri Govardhan Puja and Grand Annakuta Mahotsav Seva',
+    departments: [
+      'Annakuta Hill Preparation',
+      'Gau Seva (Cow Care)',
+      'Prasadam Feast Distribution',
+      'Parikrama Management',
+      'Decoration & Rangoli',
+      'Kirtan & Bhajan',
+      'General Seva',
+    ],
+    isActive: true,
+    isDefault: false,
+    createdAt: '2026-01-05T00:00:00.000Z',
+  },
+];
+
+let inMemoryEvents: FestivalEventRecord[] | null = null;
+
+function getEventsFilePath(): string {
+  const dir = getWritableDataDir();
+  try {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  } catch {
+    // ignore
+  }
+  return path.join(dir, 'events.json');
+}
+
+function loadEventsFromFile(): FestivalEventRecord[] {
+  try {
+    const dataFile = getEventsFilePath();
+    if (fs.existsSync(dataFile)) {
+      const data = fs.readFileSync(dataFile, 'utf-8');
+      const list = JSON.parse(data);
+      if (Array.isArray(list) && list.length > 0) return list;
+    }
+  } catch (err) {
+    console.error('Error reading events file:', err);
+  }
+  return [];
+}
+
+function saveEventsToFile(events: FestivalEventRecord[]): boolean {
+  try {
+    const dataFile = getEventsFilePath();
+    const dir = path.dirname(dataFile);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const jsonStr = JSON.stringify(events, null, 2);
+    const tempFile = `${dataFile}.tmp`;
+    try {
+      const fd = fs.openSync(tempFile, 'w');
+      fs.writeSync(fd, jsonStr, 0, 'utf-8');
+      fs.fsyncSync(fd);
+      fs.closeSync(fd);
+      fs.renameSync(tempFile, dataFile);
+    } catch {
+      fs.writeFileSync(dataFile, jsonStr, 'utf-8');
+    }
+    return true;
+  } catch (err) {
+    console.error('Error saving events file:', err);
+    return false;
+  }
+}
+
+async function loadEvents(): Promise<FestivalEventRecord[]> {
+  if (inMemoryEvents !== null && Array.isArray(inMemoryEvents) && inMemoryEvents.length > 0) {
+    return inMemoryEvents;
+  }
+
+  let list: FestivalEventRecord[] = [];
+
+  // Try local file first
+  try {
+    const fileList = loadEventsFromFile();
+    if (fileList && fileList.length > 0) {
+      list = fileList;
+    }
+  } catch (fileErr) {
+    console.warn('[Storage] Error reading local events file:', fileErr);
+  }
+
+  // If empty, initialize with defaults
+  if (list.length === 0) {
+    list = [...INITIAL_DEFAULT_EVENTS];
+    saveEventsToFile(list);
+  }
+
+  // Ensure default Janmashtami event is always present for legacy backwards-compatibility
+  const hasJanmashtami = list.some((e) => e.id === 'janmashtami-2026');
+  if (!hasJanmashtami) {
+    list.unshift(INITIAL_DEFAULT_EVENTS[0]);
+    saveEventsToFile(list);
+  }
+
+  inMemoryEvents = list;
+  return list;
+}
+
+async function saveEvents(events: FestivalEventRecord[]): Promise<boolean> {
+  inMemoryEvents = [...events];
+  return saveEventsToFile(events);
 }
 
 async function generateVolunteerId(currentList: VolunteerRecord[]): Promise<string> {
@@ -837,11 +1108,264 @@ apiRouter.post('/admin/verify-pin', (req, res) => {
   }
 });
 
+// ----------------------------------------------------
+// Festival Events & Departments Endpoints
+// ----------------------------------------------------
+
+// Get all events
+apiRouter.get('/events', async (_req, res) => {
+  try {
+    const events = await loadEvents();
+    return res.json({
+      success: true,
+      events,
+      total: events.length,
+    });
+  } catch (err: any) {
+    console.error('Error in GET /api/events:', err);
+    return res.status(500).json({ success: false, error: 'Failed to retrieve festival events' });
+  }
+});
+
+// Get single event
+apiRouter.get('/events/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const events = await loadEvents();
+    const event = events.find((e) => e.id.toLowerCase() === id.toLowerCase());
+    if (!event) {
+      return res.status(404).json({ success: false, error: `Festival event '${id}' not found` });
+    }
+    return res.json({ success: true, event });
+  } catch (err: any) {
+    console.error('Error in GET /api/events/:id:', err);
+    return res.status(500).json({ success: false, error: 'Failed to retrieve festival event' });
+  }
+});
+
+// Create new festival event
+apiRouter.post('/events', async (req, res) => {
+  try {
+    const { name, year, startDate, endDate, description, departments, isDefault, isActive, id: customId } = req.body || {};
+
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ success: false, error: 'Festival Name is required' });
+    }
+
+    const cleanName = name.trim();
+    const eventYear = year || new Date().getFullYear();
+
+    // Generate unique slug id
+    const baseSlug = customId && typeof customId === 'string' && customId.trim()
+      ? customId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-')
+      : `${cleanName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${eventYear}`;
+
+    const events = await loadEvents();
+    let uniqueId = baseSlug;
+    let counter = 1;
+    while (events.some((e) => e.id.toLowerCase() === uniqueId.toLowerCase())) {
+      uniqueId = `${baseSlug}-${counter++}`;
+    }
+
+    const deptList: string[] = Array.isArray(departments) && departments.length > 0
+      ? Array.from(new Set(departments.map((d: string) => String(d).trim()).filter(Boolean)))
+      : [...DEFAULT_DEPARTMENTS];
+
+    if (isDefault) {
+      events.forEach((e) => {
+        e.isDefault = false;
+      });
+    }
+
+    const newEvent: FestivalEventRecord = {
+      id: uniqueId,
+      name: cleanName,
+      year: eventYear,
+      startDate: startDate || '',
+      endDate: endDate || '',
+      description: description ? String(description).trim() : '',
+      departments: deptList,
+      isActive: isActive !== false,
+      isDefault: Boolean(isDefault),
+      createdAt: new Date().toISOString(),
+    };
+
+    events.unshift(newEvent);
+    await saveEvents(events);
+
+    console.log(`[Event Created] ${newEvent.id} - ${newEvent.name} (${newEvent.year})`);
+
+    return res.status(201).json({
+      success: true,
+      event: newEvent,
+      message: `Festival event '${newEvent.name}' created successfully`,
+    });
+  } catch (err: any) {
+    console.error('Error in POST /api/events:', err);
+    return res.status(500).json({ success: false, error: 'Failed to create festival event: ' + (err?.message || err) });
+  }
+});
+
+// Update festival event
+apiRouter.put('/events/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, year, startDate, endDate, description, departments, isActive, isDefault } = req.body || {};
+
+    const events = await loadEvents();
+    const index = events.findIndex((e) => e.id.toLowerCase() === id.toLowerCase());
+    if (index === -1) {
+      return res.status(404).json({ success: false, error: `Festival event '${id}' not found` });
+    }
+
+    if (isDefault) {
+      events.forEach((e) => {
+        e.isDefault = false;
+      });
+    }
+
+    const existing = events[index];
+    const updatedEvent: FestivalEventRecord = {
+      ...existing,
+      name: name !== undefined && typeof name === 'string' && name.trim() ? name.trim() : existing.name,
+      year: year !== undefined ? year : existing.year,
+      startDate: startDate !== undefined ? startDate : existing.startDate,
+      endDate: endDate !== undefined ? endDate : existing.endDate,
+      description: description !== undefined ? String(description).trim() : existing.description,
+      departments: Array.isArray(departments)
+        ? Array.from(new Set(departments.map((d: string) => String(d).trim()).filter(Boolean)))
+        : existing.departments,
+      isActive: isActive !== undefined ? Boolean(isActive) : existing.isActive,
+      isDefault: isDefault !== undefined ? Boolean(isDefault) : existing.isDefault,
+    };
+
+    events[index] = updatedEvent;
+    await saveEvents(events);
+
+    console.log(`[Event Updated] ${updatedEvent.id} - ${updatedEvent.name}`);
+
+    return res.json({
+      success: true,
+      event: updatedEvent,
+      message: `Festival event '${updatedEvent.name}' updated successfully`,
+    });
+  } catch (err: any) {
+    console.error('Error in PUT /api/events/:id:', err);
+    return res.status(500).json({ success: false, error: 'Failed to update festival event: ' + (err?.message || err) });
+  }
+});
+
+// Delete festival event
+apiRouter.delete('/events/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const events = await loadEvents();
+
+    if (events.length <= 1) {
+      return res.status(400).json({
+        success: false,
+        error: 'Cannot delete the only remaining festival event in the system.',
+      });
+    }
+
+    const index = events.findIndex((e) => e.id.toLowerCase() === id.toLowerCase());
+    if (index === -1) {
+      return res.status(404).json({ success: false, error: `Festival event '${id}' not found` });
+    }
+
+    const removed = events.splice(index, 1)[0];
+
+    // If the removed event was default, make the first remaining event default
+    if (removed.isDefault && events.length > 0) {
+      events[0].isDefault = true;
+    }
+
+    await saveEvents(events);
+    console.log(`[Event Deleted] ${removed.id} - ${removed.name}`);
+
+    return res.json({
+      success: true,
+      message: `Festival event '${removed.name}' removed successfully`,
+      deletedEventId: removed.id,
+    });
+  } catch (err: any) {
+    console.error('Error in DELETE /api/events/:id:', err);
+    return res.status(500).json({ success: false, error: 'Failed to delete festival event: ' + (err?.message || err) });
+  }
+});
+
+// Add department to an event
+apiRouter.post('/events/:id/departments', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { departmentName } = req.body || {};
+
+    if (!departmentName || typeof departmentName !== 'string' || !departmentName.trim()) {
+      return res.status(400).json({ success: false, error: 'Department name is required' });
+    }
+
+    const cleanDept = departmentName.trim();
+    const events = await loadEvents();
+    const event = events.find((e) => e.id.toLowerCase() === id.toLowerCase());
+    if (!event) {
+      return res.status(404).json({ success: false, error: `Festival event '${id}' not found` });
+    }
+
+    if (!event.departments.includes(cleanDept)) {
+      event.departments.push(cleanDept);
+      event.departments.sort((a, b) => a.localeCompare(b));
+      await saveEvents(events);
+    }
+
+    return res.json({
+      success: true,
+      departments: event.departments,
+      message: `Department '${cleanDept}' added to ${event.name}`,
+    });
+  } catch (err: any) {
+    console.error('Error in POST /api/events/:id/departments:', err);
+    return res.status(500).json({ success: false, error: 'Failed to add department' });
+  }
+});
+
+// Remove department from an event
+apiRouter.delete('/events/:id/departments/:deptName', async (req, res) => {
+  try {
+    const { id, deptName } = req.params;
+    const decodedDept = decodeURIComponent(deptName || '').trim();
+
+    const events = await loadEvents();
+    const event = events.find((e) => e.id.toLowerCase() === id.toLowerCase());
+    if (!event) {
+      return res.status(404).json({ success: false, error: `Festival event '${id}' not found` });
+    }
+
+    event.departments = event.departments.filter(
+      (d) => d.toLowerCase() !== decodedDept.toLowerCase()
+    );
+    await saveEvents(events);
+
+    return res.json({
+      success: true,
+      departments: event.departments,
+      message: `Department '${decodedDept}' removed from ${event.name}`,
+    });
+  } catch (err: any) {
+    console.error('Error in DELETE /api/events/:id/departments/:deptName:', err);
+    return res.status(500).json({ success: false, error: 'Failed to remove department' });
+  }
+});
+
 // Get all volunteers (For Admin Dashboard & sync)
 const getVolunteersHandler = async (req: express.Request, res: express.Response) => {
   try {
-    const { department, cardStatus, search, status } = req.query;
+    const { department, cardStatus, search, status, eventId } = req.query;
     let results = await loadVolunteers();
+
+    // Event filter
+    if (eventId && eventId !== 'All' && eventId !== 'ALL') {
+      results = results.filter((v) => (v.eventId || 'janmashtami-2026') === eventId);
+    }
 
     if (status && status !== 'All') {
       if (status === 'Active') {
@@ -869,7 +1393,8 @@ const getVolunteersHandler = async (req: express.Request, res: express.Response)
           v.id.toLowerCase().includes(q) ||
           v.phone.includes(q) ||
           v.hodName.toLowerCase().includes(q) ||
-          v.department.toLowerCase().includes(q)
+          v.department.toLowerCase().includes(q) ||
+          (v.eventName && v.eventName.toLowerCase().includes(q))
       );
     }
 
@@ -948,7 +1473,7 @@ apiRouter.get('/volunteer/:id', getSingleVolunteerHandler);
 const postVolunteerHandler = async (req: express.Request, res: express.Response) => {
   try {
     const body = req.body || {};
-    const { name, phone, email, hodName, department, imageUrl, cardStatus } = body;
+    const { name, phone, email, hodName, department, imageUrl, cardStatus, eventId, eventName } = body;
 
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return res.status(400).json({ success: false, error: 'Full name is required' });
@@ -983,8 +1508,25 @@ const postVolunteerHandler = async (req: express.Request, res: express.Response)
       formattedPhone = formattedPhone.slice(1);
     }
 
+    // Resolve target festival event
+    const events = await loadEvents();
+    let targetEvent = events.find((e) => e.id === eventId);
+    if (!targetEvent && eventId) {
+      targetEvent = events.find((e) => e.id.toLowerCase() === String(eventId).toLowerCase());
+    }
+    if (!targetEvent) {
+      targetEvent = events.find((e) => e.isDefault) || events[0];
+    }
+
+    const targetEventId = targetEvent ? targetEvent.id : (eventId || 'janmashtami-2026');
+    const targetEventName = targetEvent ? targetEvent.name : (eventName || 'Sri Krishna Janmashtami');
+
     const freshList = await loadVolunteers();
     const existingVolunteer = freshList.find((v) => {
+      const vEventId = v.eventId || 'janmashtami-2026';
+      // If the registration is for a specific event, check uniqueness within that event
+      if (vEventId !== targetEventId) return false;
+
       const vPhoneClean = String(v.phone || '').replace(/[\s\-()+]/g, '');
       const normalizedVPhone =
         vPhoneClean.length === 12 && vPhoneClean.startsWith('91')
@@ -999,7 +1541,7 @@ const postVolunteerHandler = async (req: express.Request, res: express.Response)
       if (existingVolunteer.status === 'Deactivated') {
         return res.status(403).json({
           success: false,
-          error: `This volunteer card (${existingVolunteer.id}) has been deactivated. Please contact the administrator.`,
+          error: `This volunteer card (${existingVolunteer.id}) for ${targetEventName} has been deactivated. Please contact the administrator.`,
           volunteer: existingVolunteer,
           volunteerId: existingVolunteer.id,
           department: existingVolunteer.department,
@@ -1009,7 +1551,7 @@ const postVolunteerHandler = async (req: express.Request, res: express.Response)
 
       return res.status(409).json({
         success: false,
-        error: `This mobile number is already registered for ${existingVolunteer.name} (${existingVolunteer.id}). Only 1 card is allowed per mobile number.`,
+        error: `This mobile number is already registered for ${existingVolunteer.name} (${existingVolunteer.id}) for ${targetEventName}. Only 1 card is allowed per mobile number per festival.`,
         volunteer: existingVolunteer,
         volunteerId: existingVolunteer.id,
         department: existingVolunteer.department,
@@ -1045,6 +1587,8 @@ const postVolunteerHandler = async (req: express.Request, res: express.Response)
       createdAt: new Date().toISOString(),
       status: 'Active',
       cardStatus: cardStatus || 'Generated',
+      eventId: targetEventId,
+      eventName: targetEventName,
     };
 
     freshList.unshift(newVolunteer);
@@ -1056,7 +1600,7 @@ const postVolunteerHandler = async (req: express.Request, res: express.Response)
       });
     }
 
-    console.log(`[Registration Success] ${newVolunteer.id} - ${newVolunteer.name} (${newVolunteer.department})`);
+    console.log(`[Registration Success] ${newVolunteer.id} - ${newVolunteer.name} (${newVolunteer.department}) [Event: ${newVolunteer.eventName}]`);
 
     return res.status(201).json({
       success: true,
@@ -1140,7 +1684,7 @@ const updateVolunteerHandler = async (req: express.Request, res: express.Respons
   try {
     const { id } = req.params;
     const body = req.body || {};
-    const { name, phone, email, hodName, department, imageUrl, status, cardStatus } = body;
+    const { name, phone, email, hodName, department, imageUrl, status, cardStatus, eventId, eventName } = body;
 
     if (!id || !String(id).trim()) {
       return res.status(400).json({ success: false, error: 'Volunteer ID is required' });
@@ -1262,6 +1806,20 @@ const updateVolunteerHandler = async (req: express.Request, res: express.Respons
       finalCardStatus = cardStatus;
     }
 
+    // Festival Event
+    let finalEventId = existing.eventId || 'janmashtami-2026';
+    let finalEventName = existing.eventName || 'Sri Krishna Janmashtami';
+    if (eventId && typeof eventId === 'string' && eventId.trim().length > 0) {
+      finalEventId = eventId.trim();
+      if (eventName && typeof eventName === 'string' && eventName.trim().length > 0) {
+        finalEventName = eventName.trim();
+      } else {
+        const events = await loadEvents();
+        const ev = events.find((e) => e.id === finalEventId);
+        if (ev) finalEventName = ev.name;
+      }
+    }
+
     const updatedVolunteer: VolunteerRecord = {
       ...existing,
       name: finalName,
@@ -1272,6 +1830,8 @@ const updateVolunteerHandler = async (req: express.Request, res: express.Respons
       imageUrl: finalImageUrl,
       status: finalStatus,
       cardStatus: finalCardStatus,
+      eventId: finalEventId,
+      eventName: finalEventName,
     };
 
     list[index] = updatedVolunteer;
@@ -1435,8 +1995,12 @@ apiRouter.post('/volunteers/delete-many', bulkDeleteVolunteersHandler);
 const exportCSVHandler = async (req: express.Request, res: express.Response) => {
   try {
     const list = await loadVolunteers();
-    const { department, status } = req.query;
+    const { department, status, eventId } = req.query;
     let filtered = list;
+
+    if (eventId && eventId !== 'All' && eventId !== 'ALL') {
+      filtered = filtered.filter((v) => (v.eventId || 'janmashtami-2026') === eventId);
+    }
 
     if (status && status !== 'All') {
       if (status === 'Active') filtered = filtered.filter((v) => v.status !== 'Deactivated');
@@ -1454,6 +2018,7 @@ const exportCSVHandler = async (req: express.Request, res: express.Response) => 
 
     const headers = [
       'Volunteer ID',
+      'Festival / Event',
       'Full Name',
       'Phone Number',
       'Department',
@@ -1475,6 +2040,7 @@ const exportCSVHandler = async (req: express.Request, res: express.Response) => 
 
       return [
         escapeCSV(vol.id),
+        escapeCSV(vol.eventName || 'Sri Krishna Janmashtami'),
         escapeCSV(vol.name),
         escapeCSV(vol.phone ? `+91 ${vol.phone}` : ''),
         escapeCSV(vol.department || 'General Seva'),
@@ -1489,7 +2055,7 @@ const exportCSVHandler = async (req: express.Request, res: express.Response) => 
 
     const csvContent = '\uFEFF' + [headers.map(escapeCSV).join(','), ...rows].join('\r\n');
     const dateStamp = new Date().toISOString().split('T')[0];
-    const filename = `ISKCON_Janmashtami_2026_Volunteers_All_${filtered.length}_${dateStamp}.csv`;
+    const filename = `ISKCON_Volunteers_${eventId || 'All'}_${filtered.length}_${dateStamp}.csv`;
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -1509,7 +2075,7 @@ const exportJSONHandler = async (_req: express.Request, res: express.Response) =
   try {
     const list = await loadVolunteers();
     const dateStamp = new Date().toISOString().split('T')[0];
-    const filename = `ISKCON_Janmashtami_2026_Database_Backup_${list.length}_${dateStamp}.json`;
+    const filename = `ISKCON_Festival_Volunteers_Backup_${list.length}_${dateStamp}.json`;
 
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -1640,6 +2206,10 @@ async function generateServerCardImageBuffer(vol: VolunteerRecord): Promise<Buff
 
   const id = escapeXml(String(vol.id || 'VOL-2026').trim());
 
+  const eventTitleRaw = vol.eventName || 'SRI KRISHNA JANMASTAMI';
+  const eventTitle = escapeXml(eventTitleRaw.toUpperCase());
+  const eventFontSize = eventTitleRaw.length > 25 ? 20 : eventTitleRaw.length > 20 ? 23 : 26;
+
   const isDeactivated = vol.status === 'Deactivated';
   const statusText = isDeactivated ? 'Deactivated' : escapeXml(vol.status || 'Active');
   const statusColor = isDeactivated ? '#DC2626' : '#16A34A';
@@ -1682,15 +2252,15 @@ async function generateServerCardImageBuffer(vol: VolunteerRecord): Promise<Buff
 
     <!-- Top Left Brand Text -->
     <text x="108" y="78" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="14" font-weight="bold" fill="#93C5FD">ISKCON</text>
-    <text x="108" y="96" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="bold" fill="#DBEAFE">Janmashtami</text>
+    <text x="108" y="96" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="bold" fill="#DBEAFE">Festival Seva</text>
 
     <!-- Top Right Badge -->
     <rect x="495" y="65" width="135" height="28" rx="14" fill="#FFFFFF" fill-opacity="0.18" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="1.5" />
     <text x="562" y="84" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="11" font-weight="bold" fill="#FFFFFF" text-anchor="middle">HARE KRISHNA</text>
 
     <!-- Header Festival Title -->
-    <text x="340" y="128" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="26" font-weight="bold" fill="#FFFFFF" text-anchor="middle">SRI KRISHNA JANMASTAMI</text>
-    <text x="340" y="153" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="14" font-weight="bold" fill="#FDE047" text-anchor="middle">2026 FESTIVAL SEVA</text>
+    <text x="340" y="128" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="${eventFontSize}" font-weight="bold" fill="#FFFFFF" text-anchor="middle">${eventTitle}</text>
+    <text x="340" y="153" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="14" font-weight="bold" fill="#FDE047" text-anchor="middle">FESTIVAL VOLUNTEER SEVA</text>
 
     <!-- Center Badge -->
     <rect x="220" y="156" width="240" height="38" rx="19" fill="${badgeColor}" stroke="#FFFFFF" stroke-width="3" />
@@ -1737,7 +2307,7 @@ async function generateServerCardImageBuffer(vol: VolunteerRecord): Promise<Buff
     <text x="595" y="868" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="14" font-weight="bold" fill="#64748B" text-anchor="end">HARE RAMA HARE KRISHNA</text>
 
     <!-- Footer -->
-    <text x="340" y="930" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="16" font-weight="bold" fill="#475569" text-anchor="middle">Janmashtami 2026 Seva Committee</text>
+    <text x="340" y="930" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="16" font-weight="bold" fill="#475569" text-anchor="middle">${escapeXml(vol.eventName || 'Festival')} Seva Committee</text>
     <text x="340" y="955" font-family="Liberation Sans, DejaVu Sans, Arial, sans-serif" font-size="12" font-weight="bold" fill="#94A3B8" text-anchor="middle">VALID DURING FESTIVAL DAYS • NON-TRANSFERABLE</text>
   </svg>
   `;
@@ -1768,9 +2338,15 @@ const exportZipCardsHandler = async (req: express.Request, res: express.Response
     const list = await loadVolunteers();
     const departmentQuery = String(req.query.department || req.body?.department || '').trim();
     const statusQuery = String(req.query.status || req.body?.status || '').trim();
+    const eventIdQuery = String(req.query.eventId || req.body?.eventId || '').trim();
     const idsQuery = req.query.ids || req.body?.ids;
 
     let targetVolunteers = [...list];
+
+    // Filter by eventId if provided
+    if (eventIdQuery && eventIdQuery !== 'ALL' && eventIdQuery !== 'All') {
+      targetVolunteers = targetVolunteers.filter((v) => (v.eventId || 'janmashtami-2026') === eventIdQuery);
+    }
 
     // Filter by specific IDs if provided
     if (idsQuery) {
@@ -1808,7 +2384,7 @@ const exportZipCardsHandler = async (req: express.Request, res: express.Response
     }
 
     console.log(
-      `[Server ZIP Export] Generating ${targetVolunteers.length} cards (Department: ${departmentQuery || 'ALL'})...`
+      `[Server ZIP Export] Generating ${targetVolunteers.length} cards (Department: ${departmentQuery || 'ALL'}, Event: ${eventIdQuery || 'ALL'})...`
     );
 
     const zip = new JSZip();
@@ -1842,7 +2418,10 @@ const exportZipCardsHandler = async (req: express.Request, res: express.Response
     const deptTag = departmentQuery && departmentQuery !== 'ALL'
       ? departmentQuery.replace(/[^a-zA-Z0-9_-]/g, '_')
       : 'All';
-    const filename = `ISKCON_Janmashtami_2026_${deptTag}_Cards_${targetVolunteers.length}_${dateStamp}.zip`;
+    const eventTag = eventIdQuery && eventIdQuery !== 'ALL'
+      ? eventIdQuery.replace(/[^a-zA-Z0-9_-]/g, '_')
+      : 'Festival';
+    const filename = `ISKCON_${eventTag}_${deptTag}_Cards_${targetVolunteers.length}_${dateStamp}.zip`;
 
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
