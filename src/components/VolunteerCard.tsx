@@ -99,8 +99,8 @@ export default function VolunteerCard({
                 </div>
                 <div className="text-left leading-none">
                   <p className="text-[10px] text-sky-200 font-bold uppercase tracking-wider">ISKCON</p>
-                  <p className="text-[9px] text-blue-100 font-medium line-clamp-1 max-w-[130px]">
-                    {volunteer.eventName ? volunteer.eventName.replace(/^Sri Krishna\s+/i, '') : 'Janmashtami'}
+                  <p className="text-[9px] text-blue-100 font-bold line-clamp-1 max-w-[135px]">
+                    {volunteer.eventName || 'Sri Krishna Janmashtami'}
                   </p>
                 </div>
               </div>
