@@ -1143,6 +1143,34 @@ apiRouter.get('/events/:id', async (req, res) => {
   }
 });
 
+// Set active / default festival event (instant global sync across app)
+apiRouter.post('/events/set-active/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const events = await loadEvents();
+    const event = events.find((e) => e.id.toLowerCase() === id.toLowerCase());
+    if (!event) {
+      return res.status(404).json({ success: false, error: `Festival event '${id}' not found` });
+    }
+
+    events.forEach((e) => {
+      e.isDefault = e.id.toLowerCase() === id.toLowerCase();
+    });
+    await saveEvents(events);
+    console.log(`[Active Event Set] ${event.id} - ${event.name}`);
+
+    return res.json({
+      success: true,
+      event,
+      events,
+      message: `Active festival set to '${event.name}'`,
+    });
+  } catch (err: any) {
+    console.error('Error in POST /api/events/set-active/:id:', err);
+    return res.status(500).json({ success: false, error: 'Failed to set active festival event' });
+  }
+});
+
 // Create new festival event
 apiRouter.post('/events', async (req, res) => {
   try {
