@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { User, Phone, UserCheck, AlertCircle, Loader2, Calendar, IdCard } from 'lucide-react';
 import { DEPARTMENTS, Volunteer, FestivalEvent } from '../types';
-import { registerVolunteerRecord, fetchAllEvents } from '../lib/storage';
+import { registerVolunteerRecord, fetchAllEvents, subscribeToVolunteerUpdates } from '../lib/storage';
 import ImageUploader from './ImageUploader';
 import { AppLogo } from './AppLogo';
 
@@ -48,36 +48,63 @@ export default function RegistrationForm({ onSuccess }: RegistrationFormProps) {
   const [errors, setErrors] = useState<FormErrors>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Load events on mount
+  const loadEventsList = useCallback(async (isMounted: boolean) => {
+    try {
+      const list = await fetchAllEvents();
+      if (isMounted && list.length > 0) {
+        setEvents(list);
+        const savedId = localStorage.getItem('active_festival_event_id');
+        let defaultEvent = savedId ? list.find((e) => e.id === savedId) : null;
+        if (!defaultEvent) {
+          defaultEvent =
+            list.find((e) => e.isDefault && e.isActive !== false) ||
+            list.find((e) => e.isActive !== false) ||
+            list[0];
+        }
+        if (defaultEvent) {
+          setFormData((prev) => ({
+            ...prev,
+            eventId: defaultEvent.id,
+            eventName: defaultEvent.name,
+          }));
+        }
+      }
+    } catch (err) {
+      console.error('Error loading events for registration form:', err);
+    } finally {
+      if (isMounted) setLoadingEvents(false);
+    }
+  }, []);
+
+  // Load events on mount and listen to active event changes
   useEffect(() => {
     let isMounted = true;
-    async function load() {
-      try {
-        setLoadingEvents(true);
-        const list = await fetchAllEvents();
-        if (isMounted && list.length > 0) {
-          setEvents(list);
-          // Find default or first active event
-          const defaultEvent = list.find((e) => e.isDefault && e.isActive !== false) || list.find((e) => e.isActive !== false) || list[0];
-          if (defaultEvent) {
-            setFormData((prev) => ({
-              ...prev,
-              eventId: defaultEvent.id,
-              eventName: defaultEvent.name,
-            }));
-          }
-        }
-      } catch (err) {
-        console.error('Error loading events for registration form:', err);
-      } finally {
-        if (isMounted) setLoadingEvents(false);
+    loadEventsList(isMounted);
+
+    const handleFestivalChange = (e: any) => {
+      if (e?.detail?.event) {
+        const ev = e.detail.event;
+        setFormData((prev) => ({
+          ...prev,
+          eventId: ev.id,
+          eventName: ev.name,
+          department: '-- Select --',
+        }));
       }
-    }
-    load();
+      loadEventsList(isMounted);
+    };
+
+    window.addEventListener('festival_event_changed', handleFestivalChange);
+    const unsubscribe = subscribeToVolunteerUpdates(() => {
+      loadEventsList(isMounted);
+    });
+
     return () => {
       isMounted = false;
+      window.removeEventListener('festival_event_changed', handleFestivalChange);
+      unsubscribe();
     };
-  }, []);
+  }, [loadEventsList]);
 
   // Active event object
   const currentEvent = events.find((e) => e.id === formData.eventId) || events[0];
