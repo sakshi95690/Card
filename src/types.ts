@@ -1,5 +1,19 @@
 export type CardStatus = 'Generated' | 'Printed' | 'Issued';
 
+export interface FestivalEvent {
+  id: string; // unique slug e.g. 'janmashtami-2026'
+  name: string; // e.g. 'Sri Krishna Janmashtami'
+  year: number | string; // e.g. 2026
+  date?: string; // e.g. '2026-09-04'
+  startDate?: string;
+  endDate?: string;
+  description?: string;
+  departments: string[];
+  isActive: boolean;
+  isDefault?: boolean;
+  createdAt: string;
+}
+
 export interface Volunteer {
   id: string;
   name: string;
@@ -11,6 +25,8 @@ export interface Volunteer {
   createdAt: string;
   status: 'Verified' | 'Pending' | 'Active' | 'Deactivated';
   cardStatus?: CardStatus;
+  eventId?: string;
+  eventName?: string;
 }
 
 export interface AdminNotification {
@@ -20,6 +36,7 @@ export interface AdminNotification {
   department: string;
   timestamp: string;
   read: boolean;
+  eventId?: string;
 }
 
 export interface VolunteerPublicVerification {
@@ -28,6 +45,8 @@ export interface VolunteerPublicVerification {
   department: string;
   status: string;
   createdAt: string;
+  eventId?: string;
+  eventName?: string;
 }
 
 export const DEPARTMENTS = [
