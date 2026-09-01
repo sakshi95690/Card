@@ -270,49 +270,6 @@ export default function RegistrationForm({ onSuccess }: RegistrationFormProps) {
             </div>
           )}
 
-          {/* Festival / Event Selector (Shows when there are multiple active events or to allow switching) */}
-          {events.length > 1 && (
-            <div id="field-eventId" className="space-y-1">
-              <label htmlFor="volunteer-festival-event" className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
-                Festival / Event <span className="text-[#1E40AF]">*</span>
-              </label>
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-                  <Calendar className="w-4 h-4" />
-                </div>
-                <select
-                  id="volunteer-festival-event"
-                  name="eventId"
-                  value={formData.eventId}
-                  onChange={(e) => {
-                    const selId = e.target.value;
-                    const selEvent = events.find((ev) => ev.id === selId);
-                    setFormData({
-                      ...formData,
-                      eventId: selId,
-                      eventName: selEvent ? selEvent.name : formData.eventName,
-                      department: '-- Select --', // Reset dept on festival switch
-                    });
-                  }}
-                  className="w-full pl-9 pr-8 py-2 rounded-lg border border-slate-200 focus:border-blue-500 focus:bg-white focus:ring-1 focus:ring-blue-200 text-sm text-slate-800 bg-slate-50/50 outline-none transition-all appearance-none cursor-pointer"
-                >
-                  {events
-                    .filter((ev) => ev.isActive !== false)
-                    .map((ev) => (
-                      <option key={ev.id} value={ev.id}>
-                        {ev.name} {ev.year ? `(${ev.year})` : ''}
-                      </option>
-                    ))}
-                </select>
-                <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none text-slate-500">
-                  <svg className="w-4 h-4 fill-current" viewBox="0 0 20 20">
-                    <path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" />
-                  </svg>
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* 1. Name */}
           <div id="field-name" className="space-y-1">
             <label htmlFor="volunteer-name" className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider">
