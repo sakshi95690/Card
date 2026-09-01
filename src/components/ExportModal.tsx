@@ -792,7 +792,9 @@ export default function ExportModal({
                   </div>
                   <div className="text-left leading-none">
                     <p className="text-[10px] text-sky-200 font-bold uppercase tracking-wider">ISKCON</p>
-                    <p className="text-[9px] text-blue-100 font-medium">Janmashtami</p>
+                    <p className="text-[9px] text-blue-100 font-medium line-clamp-1 max-w-[130px]">
+                      {renderVol.eventName ? renderVol.eventName.replace(/^Sri Krishna\s+/i, '') : 'Festival Seva'}
+                    </p>
                   </div>
                 </div>
 
