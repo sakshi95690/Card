@@ -1203,7 +1203,7 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
                 ? 'Try searching with a different name, department, or phone number.'
                 : statusFilter === 'DEACTIVATED'
                 ? 'There are currently no deactivated volunteer cards.'
-                : 'Jab bhi koi volunteer kisi bhi device se form bharega, uska card yahan automatically instant reflect hoga.'}
+                : 'No volunteer cards available.'}
             </p>
             {(selectedDepartment !== 'ALL' || searchQuery || statusFilter !== 'ALL') ? (
               <button
