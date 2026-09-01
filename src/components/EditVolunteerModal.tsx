@@ -15,7 +15,7 @@ import {
   CheckCircle2,
   Trash2,
 } from 'lucide-react';
-import { Volunteer, DEPARTMENTS, CardStatus } from '../types';
+import { Volunteer, DEPARTMENTS, CardStatus, FestivalEvent } from '../types';
 import { updateVolunteerRecord } from '../lib/storage';
 import ImageUploader from './ImageUploader';
 
@@ -24,6 +24,8 @@ interface EditVolunteerModalProps {
   onClose: () => void;
   onSaveSuccess: (updated: Volunteer) => void;
   onRequestDelete?: (vol: Volunteer) => void;
+  availableDepartments?: string[];
+  events?: FestivalEvent[];
 }
 
 export default function EditVolunteerModal({
@@ -31,7 +33,12 @@ export default function EditVolunteerModal({
   onClose,
   onSaveSuccess,
   onRequestDelete,
+  availableDepartments,
+  events,
 }: EditVolunteerModalProps) {
+  const [selectedEventId, setSelectedEventId] = useState<string>(
+    volunteer.eventId || 'janmashtami-2026'
+  );
   const [name, setName] = useState(volunteer.name || '');
   const [phone, setPhone] = useState(volunteer.phone || '');
   const [email, setEmail] = useState(volunteer.email || '');
@@ -49,6 +56,15 @@ export default function EditVolunteerModal({
 
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Compute active departments for current selected event
+  const currentEvent = events?.find((e) => e.id === selectedEventId);
+  const computedDepartments =
+    currentEvent?.departments && currentEvent.departments.length > 0
+      ? currentEvent.departments
+      : availableDepartments && availableDepartments.length > 0
+      ? availableDepartments
+      : DEPARTMENTS;
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     // Only allow numeric input, max 10 digits
@@ -99,6 +115,8 @@ export default function EditVolunteerModal({
         status,
         cardStatus,
         imageUrl,
+        eventId: selectedEventId,
+        eventName: currentEvent ? currentEvent.name : undefined,
       });
 
       onSaveSuccess(updated);
@@ -221,6 +239,35 @@ export default function EditVolunteerModal({
             )}
           </div>
 
+          {/* Festival / Event Selector */}
+          {events && events.length > 0 && (
+            <div className="p-3 rounded-2xl bg-purple-50/70 border border-purple-200/80 space-y-1.5">
+              <label className="text-xs font-bold text-purple-900 flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-purple-700" />
+                <span>Festival / Event *</span>
+              </label>
+              <select
+                id="edit-volunteer-event-select"
+                value={selectedEventId}
+                onChange={(e) => {
+                  const newEventId = e.target.value;
+                  setSelectedEventId(newEventId);
+                  const ev = events.find((item) => item.id === newEventId);
+                  if (ev?.departments && ev.departments.length > 0 && !ev.departments.includes(department)) {
+                    setDepartment(ev.departments[0]);
+                  }
+                }}
+                className="w-full px-3 py-2 rounded-xl bg-white border border-purple-300 text-xs font-bold text-slate-900 focus:border-purple-600 focus:ring-2 focus:ring-purple-100 outline-none cursor-pointer"
+              >
+                {events.map((ev) => (
+                  <option key={ev.id} value={ev.id}>
+                    {ev.name} {ev.year ? `(${ev.year})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {/* Grid of Inputs */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
             {/* Full Name */}
@@ -291,7 +338,7 @@ export default function EditVolunteerModal({
                 onChange={(e) => setDepartment(e.target.value)}
                 className="w-full px-3 py-2 rounded-xl bg-white border border-slate-300 text-xs font-semibold text-slate-900 focus:border-[#1E40AF] focus:ring-2 focus:ring-blue-100 outline-none cursor-pointer"
               >
-                {DEPARTMENTS.map((dept) => (
+                {computedDepartments.map((dept) => (
                   <option key={dept} value={dept}>
                     {dept}
                   </option>
