@@ -184,7 +184,11 @@ export async function updateFestivalEvent(
     try {
       broadcastChannel?.postMessage({
         type: 'EVENTS_UPDATED',
+        activeEventId: data.event.isDefault ? data.event.id : undefined,
       });
+      window.dispatchEvent(
+        new CustomEvent('festival_event_changed', { detail: { event: data.event } })
+      );
     } catch {
       // ignore
     }
@@ -192,6 +196,55 @@ export async function updateFestivalEvent(
   }
 
   throw new Error(extractErrorMessage(data, 'Failed to update festival event'));
+}
+
+/**
+ * Set active/default festival event across the entire system
+ */
+export async function setActiveFestivalEvent(id: string): Promise<FestivalEvent> {
+  const cleanId = String(id || '').trim();
+  if (!cleanId) throw new Error('Festival ID is required');
+
+  try {
+    const res = await fetch(`/api/events/set-active/${encodeURIComponent(cleanId)}`, {
+      method: 'POST',
+      headers: { 'Cache-Control': 'no-cache' },
+    });
+    const data = await res.json();
+    if (res.ok && data?.success && data?.event) {
+      localStorage.setItem('active_festival_event_id', cleanId);
+      try {
+        broadcastChannel?.postMessage({
+          type: 'EVENTS_UPDATED',
+          activeEventId: cleanId,
+        });
+        window.dispatchEvent(
+          new CustomEvent('festival_event_changed', { detail: { event: data.event } })
+        );
+      } catch {
+        // ignore
+      }
+      return data.event;
+    }
+  } catch (err) {
+    console.warn('[Storage] Notice in POST /api/events/set-active, falling back to PUT:', err);
+  }
+
+  // Fallback to updating isDefault
+  const updated = await updateFestivalEvent(cleanId, { isDefault: true, isActive: true });
+  localStorage.setItem('active_festival_event_id', cleanId);
+  try {
+    broadcastChannel?.postMessage({
+      type: 'EVENTS_UPDATED',
+      activeEventId: cleanId,
+    });
+    window.dispatchEvent(
+      new CustomEvent('festival_event_changed', { detail: { event: updated } })
+    );
+  } catch {
+    // ignore
+  }
+  return updated;
 }
 
 /**
