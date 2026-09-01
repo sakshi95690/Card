@@ -770,13 +770,6 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
                 <h2 className="text-sm sm:text-base font-bold text-slate-900 font-serif-cultural leading-tight">
                   Volunteers
                 </h2>
-                <div className="flex items-center gap-2 mt-0.5 text-[11px] font-semibold text-slate-600">
-                  <span className="text-[#1E40AF] font-bold">{activeCount} Active</span>
-                  <span className="text-slate-300">•</span>
-                  <span className="text-rose-600 font-bold">{deactivatedCount} Deactivated</span>
-                  <span className="text-slate-300">•</span>
-                  <span>{totalCount} Total</span>
-                </div>
               </div>
             </div>
 
@@ -865,83 +858,8 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
           </div>
         </div>
 
-        {/* Festival Quick-Select Tabs Bar */}
-        <div className="mt-3 pt-3 border-t border-slate-100">
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none text-xs">
-            <button
-              type="button"
-              id="admin-quick-select-all-festivals"
-              onClick={() => handleSelectFestival('ALL')}
-              className={`px-3 py-1.5 rounded-xl font-bold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
-                selectedEventId === 'ALL'
-                  ? 'bg-[#1E40AF] text-white shadow-xs'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-              }`}
-            >
-              <span>All Festivals</span>
-              <span
-                className={`px-1.5 py-0.2 rounded-full text-[10px] ${
-                  selectedEventId === 'ALL' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-600'
-                }`}
-              >
-                {volunteers.length}
-              </span>
-            </button>
-
-            {events.map((ev) => {
-              const isSelected = selectedEventId === ev.id;
-              const isDefaultActive = Boolean(ev.isDefault);
-              const evCount = volunteers.filter(
-                (v) => (v.eventId || 'janmashtami-2026') === ev.id
-              ).length;
-
-              return (
-                <button
-                  key={ev.id}
-                  type="button"
-                  id={`admin-quick-select-festival-${ev.id}`}
-                  onClick={() => handleSelectFestival(ev.id)}
-                  className={`px-3 py-1.5 rounded-xl font-bold whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 border ${
-                    isSelected
-                      ? 'bg-purple-900 text-white border-purple-950 shadow-xs'
-                      : isDefaultActive
-                      ? 'bg-purple-50 text-purple-900 border-purple-300 hover:bg-purple-100'
-                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                  }`}
-                  title={`Select and activate ${ev.name} everywhere`}
-                >
-                  <Calendar
-                    className={`w-3 h-3 ${isSelected ? 'text-purple-200' : 'text-purple-700'}`}
-                  />
-                  <span>
-                    {ev.name} {ev.year ? `(${ev.year})` : ''}
-                  </span>
-                  {isDefaultActive && (
-                    <span
-                      className={`px-1 py-0.2 rounded text-[9px] uppercase tracking-wide font-extrabold ${
-                        isSelected
-                          ? 'bg-purple-800 text-purple-200'
-                          : 'bg-purple-200 text-purple-900'
-                      }`}
-                    >
-                      Active
-                    </span>
-                  )}
-                  <span
-                    className={`px-1.5 py-0.2 rounded-full text-[10px] ${
-                      isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
-                    }`}
-                  >
-                    {evCount}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
         {/* Status Filters: Active / Deactivated / All */}
-        <div className="mt-2.5 pt-2.5 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+        <div className="mt-3 pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
           <div className="flex items-center gap-1 bg-slate-100/80 p-1 rounded-xl border border-slate-200/80">
             <button
               type="button"
@@ -1014,7 +932,7 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
                   onChange={(e) => handleSelectFestival(e.target.value)}
                   className="w-full pl-8 pr-7 py-2 rounded-xl bg-purple-50/50 sm:bg-white border border-purple-200 sm:border-purple-200 text-xs text-slate-800 font-bold focus:border-[#1E40AF] focus:ring-2 focus:ring-purple-100 outline-none transition-all cursor-pointer appearance-none"
                 >
-                  <option value="ALL">✨ All Festivals / Events ({volunteers.length})</option>
+                  <option value="ALL">All Festivals ({volunteers.length})</option>
                   {events.map((ev) => {
                     const evCount = volunteers.filter(
                       (v) => (v.eventId || 'janmashtami-2026') === ev.id
