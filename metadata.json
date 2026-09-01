@@ -1,6 +1,6 @@
 {
-  "name": "Janmashtami 2026 Volunteer Registration",
-  "description": "Public Volunteer Registration Form and Pass Generator for Janmashtami 2026",
+  "name": "Temple Festival Volunteer Management System",
+  "description": "Multi-festival temple volunteer registration, department management, and pass generation platform",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
