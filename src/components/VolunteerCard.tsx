@@ -99,7 +99,9 @@ export default function VolunteerCard({
                 </div>
                 <div className="text-left leading-none">
                   <p className="text-[10px] text-sky-200 font-bold uppercase tracking-wider">ISKCON</p>
-                  <p className="text-[9px] text-blue-100 font-medium">Janmashtami</p>
+                  <p className="text-[9px] text-blue-100 font-medium line-clamp-1 max-w-[130px]">
+                    {volunteer.eventName ? volunteer.eventName.replace(/^Sri Krishna\s+/i, '') : 'Janmashtami'}
+                  </p>
                 </div>
               </div>
 
@@ -189,7 +191,7 @@ export default function VolunteerCard({
             {/* Bottom Card Footer */}
             <div className="text-center pt-1.5">
               <p className="text-[10px] text-slate-500 font-medium">
-                Janmashtami 2026 Seva Committee
+                {volunteer.eventName ? `${volunteer.eventName} Seva Committee` : 'Janmashtami 2026 Seva Committee'}
               </p>
               <p className="text-[8px] sm:text-[9px] text-slate-400 uppercase tracking-widest mt-0.5">
                 Valid during festival days • Non-transferable
