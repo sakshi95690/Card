@@ -27,10 +27,15 @@ import {
   FileSpreadsheet,
   Pencil,
   Trash2,
+  Calendar,
+  Settings2,
+  Plus,
+  UserPlus,
 } from 'lucide-react';
-import { DEPARTMENTS, Volunteer } from '../types';
+import { DEPARTMENTS, Volunteer, FestivalEvent } from '../types';
 import {
   fetchAllVolunteers,
+  fetchAllEvents,
   subscribeToVolunteerUpdates,
   deactivateVolunteerCard,
   updateVolunteerStatus,
@@ -39,8 +44,10 @@ import {
 } from '../lib/storage';
 import VolunteerCard from './VolunteerCard';
 import EditVolunteerModal from './EditVolunteerModal';
+import AddVolunteerModal from './AddVolunteerModal';
 import DeleteConfirmModal from './DeleteConfirmModal';
 import ExportModal from './ExportModal';
+import FestivalEventManagerModal from './FestivalEventManagerModal';
 import { AppLogo } from './AppLogo';
 
 interface AdminDashboardProps {
@@ -49,6 +56,11 @@ interface AdminDashboardProps {
 
 export default function AdminDashboard({ onBackToRegistration }: AdminDashboardProps) {
   const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
+  const [events, setEvents] = useState<FestivalEvent[]>([]);
+  const [selectedEventId, setSelectedEventId] = useState<string>('ALL');
+  const [isFestivalModalOpen, setIsFestivalModalOpen] = useState(false);
+  const [isAddVolunteerModalOpen, setIsAddVolunteerModalOpen] = useState(false);
+
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -90,15 +102,19 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
     }, 4500);
   };
 
-  // Load volunteers list from server
+  // Load volunteers list and events from server
   const loadData = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) setIsRefreshing(true);
     try {
-      const list = await fetchAllVolunteers();
-      setVolunteers(list);
+      const [volList, evList] = await Promise.all([
+        fetchAllVolunteers(),
+        fetchAllEvents(),
+      ]);
+      setVolunteers(volList);
+      setEvents(evList);
       setFetchError(null);
     } catch (err: any) {
-      console.error('Failed to load volunteers:', err);
+      console.error('Failed to load data:', err);
       setFetchError(err?.message || 'Failed to connect to central database server');
     } finally {
       setIsLoading(false);
@@ -120,20 +136,52 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
     };
   }, [loadData]);
 
-  // Compute status counts
+  // Currently selected event object
+  const currentEvent = useMemo(() => {
+    return events.find((e) => e.id === selectedEventId);
+  }, [events, selectedEventId]);
+
+  // Dynamic department list based on selected event
+  const activeDepartmentOptions = useMemo(() => {
+    if (currentEvent && currentEvent.departments && currentEvent.departments.length > 0) {
+      return currentEvent.departments;
+    }
+    const set = new Set<string>();
+    events.forEach((ev) => ev.departments?.forEach((d) => set.add(d)));
+    volunteers.forEach((v) => {
+      if (v.department) set.add(v.department);
+    });
+    DEPARTMENTS.forEach((d) => set.add(d));
+    return Array.from(set);
+  }, [currentEvent, events, volunteers]);
+
+  // Compute status counts (filtered by event if selected)
+  const eventScopedVolunteers = useMemo(() => {
+    if (selectedEventId === 'ALL') return volunteers;
+    return volunteers.filter((v) => (v.eventId || 'janmashtami-2026') === selectedEventId);
+  }, [volunteers, selectedEventId]);
+
   const activeCount = useMemo(() => {
-    return volunteers.filter((v) => v.status !== 'Deactivated').length;
-  }, [volunteers]);
+    return eventScopedVolunteers.filter((v) => v.status !== 'Deactivated').length;
+  }, [eventScopedVolunteers]);
 
   const deactivatedCount = useMemo(() => {
-    return volunteers.filter((v) => v.status === 'Deactivated').length;
-  }, [volunteers]);
+    return eventScopedVolunteers.filter((v) => v.status === 'Deactivated').length;
+  }, [eventScopedVolunteers]);
 
-  const totalCount = volunteers.length;
+  const totalCount = eventScopedVolunteers.length;
 
-  // Filtered volunteers based on status, department and search query
+  // Filtered volunteers based on festival event, status, department and search query
   const filteredVolunteers = useMemo(() => {
     return volunteers.filter((v) => {
+      // Event filter
+      if (selectedEventId !== 'ALL') {
+        const vEventId = v.eventId || 'janmashtami-2026';
+        if (vEventId !== selectedEventId) {
+          return false;
+        }
+      }
+
       // Status filter
       if (statusFilter === 'ACTIVE' && v.status === 'Deactivated') {
         return false;
@@ -155,29 +203,30 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
           String(v?.id || '').toLowerCase().includes(q) ||
           String(v?.phone || '').includes(q) ||
           String(v?.hodName || '').toLowerCase().includes(q) ||
-          String(v?.department || '').toLowerCase().includes(q);
+          String(v?.department || '').toLowerCase().includes(q) ||
+          String(v?.eventName || '').toLowerCase().includes(q);
         if (!matchesQuery) return false;
       }
 
       return true;
     });
-  }, [volunteers, statusFilter, selectedDepartment, searchQuery]);
+  }, [volunteers, selectedEventId, statusFilter, selectedDepartment, searchQuery]);
 
-  // Compute counts per department for filter badges (respecting status filter)
+  // Compute counts per department for filter badges (respecting event and status filter)
   const departmentCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     const relevantList =
       statusFilter === 'ACTIVE'
-        ? volunteers.filter((v) => v.status !== 'Deactivated')
+        ? eventScopedVolunteers.filter((v) => v.status !== 'Deactivated')
         : statusFilter === 'DEACTIVATED'
-        ? volunteers.filter((v) => v.status === 'Deactivated')
-        : volunteers;
+        ? eventScopedVolunteers.filter((v) => v.status === 'Deactivated')
+        : eventScopedVolunteers;
 
     relevantList.forEach((v) => {
       counts[v.department] = (counts[v.department] || 0) + 1;
     });
     return counts;
-  }, [volunteers, statusFilter]);
+  }, [eventScopedVolunteers, statusFilter]);
 
   // Select all or deselect all
   const handleToggleSelectAll = () => {
@@ -383,6 +432,16 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
               </button>
               <button
                 type="button"
+                id="add-volunteer-btn-mobile"
+                onClick={() => setIsAddVolunteerModalOpen(true)}
+                className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all flex items-center gap-1 cursor-pointer min-h-[34px]"
+                title="Register new volunteer"
+              >
+                <UserPlus className="w-3.5 h-3.5 shrink-0" />
+                <span>Add</span>
+              </button>
+              <button
+                type="button"
                 id="admin-logout-btn-mobile"
                 onClick={onBackToRegistration}
                 className="px-2.5 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-[#1E40AF] border border-blue-200 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer min-h-[34px]"
@@ -395,6 +454,18 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
 
           {/* Desktop Actions & Export */}
           <div className="flex flex-wrap items-center gap-2">
+            {/* Quick Add Volunteer Button (Admin Manual Registration) */}
+            <button
+              type="button"
+              id="admin-add-volunteer-btn"
+              onClick={() => setIsAddVolunteerModalOpen(true)}
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center gap-1.5 cursor-pointer min-h-[36px]"
+              title="Manually register a volunteer and generate their pass"
+            >
+              <UserPlus className="w-4 h-4 shrink-0" />
+              <span>+ Add Volunteer</span>
+            </button>
+
             {/* Delete Selected (Bulk Action) */}
             {isAnySelected && (
               <button
@@ -408,6 +479,18 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
                 <span>Delete Selected ({selectedIds.length})</span>
               </button>
             )}
+
+            {/* Manage Festivals & Events Button */}
+            <button
+              type="button"
+              id="open-festival-manager-btn"
+              onClick={() => setIsFestivalModalOpen(true)}
+              className="px-3 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs min-h-[36px]"
+              title="Manage Festivals and Seva Departments"
+            >
+              <Calendar className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+              <span>Festivals & Events ({events.length})</span>
+            </button>
 
             {/* Comprehensive Export Data Button (CSV, ZIP, JSON, Print) */}
             <button
@@ -520,12 +603,46 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
           </span>
         </div>
 
-        {/* Search & Department Filter Bar */}
+        {/* Search & Event & Department Filter Bar */}
         {volunteers.length > 0 && (
           <div className="mt-2.5 pt-2.5 border-t border-slate-100 space-y-2">
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+              {/* Festival / Event Filter */}
+              <div className="relative sm:col-span-4">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-purple-700">
+                  <Calendar className="w-3.5 h-3.5" />
+                </div>
+                <select
+                  id="admin-event-filter"
+                  value={selectedEventId}
+                  onChange={(e) => {
+                    setSelectedEventId(e.target.value);
+                    setSelectedDepartment('ALL'); // Reset dept when changing festival
+                    setSelectedIds([]);
+                  }}
+                  className="w-full pl-8 pr-7 py-2 rounded-xl bg-purple-50/50 sm:bg-white border border-purple-200 sm:border-purple-200 text-xs text-slate-800 font-bold focus:border-[#1E40AF] focus:ring-2 focus:ring-purple-100 outline-none transition-all cursor-pointer appearance-none"
+                >
+                  <option value="ALL">✨ All Festivals / Events ({volunteers.length})</option>
+                  {events.map((ev) => {
+                    const evCount = volunteers.filter(
+                      (v) => (v.eventId || 'janmashtami-2026') === ev.id
+                    ).length;
+                    return (
+                      <option key={ev.id} value={ev.id}>
+                        {ev.name} {ev.year ? `(${ev.year})` : ''} ({evCount})
+                      </option>
+                    );
+                  })}
+                </select>
+                <div className="absolute inset-y-0 right-0 pr-2.5 flex items-center pointer-events-none text-slate-400">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </div>
+
               {/* Search Input */}
-              <div className="relative sm:col-span-7">
+              <div className="relative sm:col-span-4">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
                   <Search className="w-3.5 h-3.5" />
                 </div>
@@ -549,7 +666,7 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
               </div>
 
               {/* Department Dropdown Filter */}
-              <div className="relative sm:col-span-5">
+              <div className="relative sm:col-span-4">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-[#1E40AF]">
                   <Filter className="w-3.5 h-3.5" />
                 </div>
@@ -563,7 +680,7 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
                   className="w-full pl-8 pr-7 py-2 rounded-xl bg-slate-50 sm:bg-white border border-slate-200 sm:border-blue-100 text-xs text-slate-800 font-medium focus:border-[#1E40AF] focus:ring-2 focus:ring-blue-100 outline-none transition-all cursor-pointer appearance-none"
                 >
                   <option value="ALL">All Departments</option>
-                  {DEPARTMENTS.map((dept) => {
+                  {activeDepartmentOptions.map((dept) => {
                     const count = departmentCounts[dept] || 0;
                     return (
                       <option key={dept} value={dept}>
@@ -580,23 +697,53 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
               </div>
             </div>
 
-            {/* Active Filter Pill */}
-            {selectedDepartment !== 'ALL' && (
-              <div className="flex items-center justify-between px-0.5 text-xs">
-                <span className="inline-flex items-center gap-1 font-semibold text-blue-900 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200 text-[11px]">
-                  <Building2 className="w-3 h-3 text-[#1E40AF]" />
-                  <span>Filtered: <strong>{selectedDepartment}</strong> ({filteredVolunteers.length})</span>
-                </span>
+            {/* Active Filter Pills */}
+            <div className="flex items-center justify-between px-0.5 text-xs flex-wrap gap-2">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {selectedEventId !== 'ALL' && (
+                  <span className="inline-flex items-center gap-1 font-bold text-purple-900 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200 text-[11px]">
+                    <Calendar className="w-3 h-3 text-purple-700" />
+                    <span>Festival: <strong>{currentEvent?.name || selectedEventId}</strong></span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedEventId('ALL')}
+                      className="ml-1 text-purple-700 hover:text-purple-950 cursor-pointer"
+                    >
+                      ×
+                    </button>
+                  </span>
+                )}
+
+                {selectedDepartment !== 'ALL' && (
+                  <span className="inline-flex items-center gap-1 font-semibold text-blue-900 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200 text-[11px]">
+                    <Building2 className="w-3 h-3 text-[#1E40AF]" />
+                    <span>Department: <strong>{selectedDepartment}</strong> ({filteredVolunteers.length})</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedDepartment('ALL')}
+                      className="ml-1 text-blue-700 hover:text-blue-950 cursor-pointer"
+                    >
+                      ×
+                    </button>
+                  </span>
+                )}
+              </div>
+
+              {(selectedEventId !== 'ALL' || selectedDepartment !== 'ALL' || searchQuery) && (
                 <button
                   type="button"
-                  id="clear-dept-filter-btn"
-                  onClick={() => setSelectedDepartment('ALL')}
+                  id="clear-all-filters-btn"
+                  onClick={() => {
+                    setSelectedEventId('ALL');
+                    setSelectedDepartment('ALL');
+                    setSearchQuery('');
+                  }}
                   className="text-[11px] text-[#1E40AF] hover:underline font-bold cursor-pointer"
                 >
-                  Show All Departments
+                  Reset All Filters
                 </button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -748,7 +895,7 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
                 ? 'There are currently no deactivated volunteer cards.'
                 : 'Jab bhi koi volunteer kisi bhi device se form bharega, uska card yahan automatically instant reflect hoga.'}
             </p>
-            {(selectedDepartment !== 'ALL' || searchQuery || statusFilter !== 'ALL') && (
+            {(selectedDepartment !== 'ALL' || searchQuery || statusFilter !== 'ALL') ? (
               <button
                 type="button"
                 onClick={() => {
@@ -759,6 +906,16 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
                 className="mt-2 text-xs text-[#1E40AF] font-bold hover:underline cursor-pointer"
               >
                 Reset All Filters
+              </button>
+            ) : (
+              <button
+                type="button"
+                id="empty-add-volunteer-btn"
+                onClick={() => setIsAddVolunteerModalOpen(true)}
+                className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>+ Register New Volunteer</span>
               </button>
             )}
           </div>
@@ -948,6 +1105,8 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
       {editingVolunteer && (
         <EditVolunteerModal
           volunteer={editingVolunteer}
+          events={events}
+          availableDepartments={activeDepartmentOptions}
           onClose={() => setEditingVolunteer(null)}
           onSaveSuccess={handleSaveEditSuccess}
           onRequestDelete={(vol) => {
@@ -1122,6 +1281,29 @@ export default function AdminDashboard({ onBackToRegistration }: AdminDashboardP
         allVolunteers={volunteers}
         filteredVolunteers={filteredVolunteers}
         selectedIds={selectedIds}
+      />
+
+      {/* Festival and Event Management Modal */}
+      <FestivalEventManagerModal
+        isOpen={isFestivalModalOpen}
+        onClose={() => setIsFestivalModalOpen(false)}
+        events={events}
+        selectedEventId={selectedEventId}
+        onSelectEvent={(id) => setSelectedEventId(id)}
+        onEventsUpdated={() => loadData(false)}
+      />
+
+      {/* Admin Manual Volunteer Creation Modal */}
+      <AddVolunteerModal
+        isOpen={isAddVolunteerModalOpen}
+        onClose={() => setIsAddVolunteerModalOpen(false)}
+        events={events}
+        defaultEventId={selectedEventId}
+        onSuccess={(newVol) => {
+          setVolunteers((prev) => [newVol, ...prev.filter((v) => v.id !== newVol.id)]);
+          showNotification(`Volunteer pass for ${newVol.name} (${newVol.id}) registered successfully!`);
+          setPreviewVolunteer(newVol);
+        }}
       />
     </div>
   );
